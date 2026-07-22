@@ -289,6 +289,46 @@ els.btn.addEventListener('click', runAnalysis);
 els.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') runAnalysis(); });
 document.getElementById('history-btn').addEventListener('click', renderHistoryPage);
 
+// ------------------------------------------------------------
+// SCORE FIGÉ — le score de qualité de setup est capturé au moment précis où le
+// breakout est détecté pour la première fois (ticker + jour + direction), puis ne
+// bouge plus pour le reste de la fenêtre. Sans ça, la "distance au prix actuel" fait
+// sauter la note d'un scan à l'autre à cause du simple bruit de marché (le prix oscille
+// de quelques ticks autour du niveau), ce qui casse la lecture "je regarde, je décide".
+const FROZEN_SCORE_KEY = 'orb-scanner-frozen-scores';
+
+function loadFrozenScores() {
+  try {
+    const raw = localStorage.getItem(FROZEN_SCORE_KEY);
+    return raw ? JSON.parse(raw) : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveFrozenScores(scores) {
+  try { localStorage.setItem(FROZEN_SCORE_KEY, JSON.stringify(scores)); } catch { /* quota / navigation privée */ }
+}
+
+function getOrFreezeScore(ticker, signal, freshScore) {
+  if (signal !== 'bull' && signal !== 'bear') return freshScore; // pas de breakout, rien à figer
+
+  const today = new Date().toISOString().slice(0, 10);
+  const key = `${ticker}|${today}|${signal}`;
+  const scores = loadFrozenScores();
+
+  if (scores[key]) {
+    return scores[key]; // déjà figé pour ce breakout précis — on renvoie la version gelée
+  }
+
+  // Première détection de ce breakout aujourd'hui : on fige le score maintenant
+  const frozenAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  const frozen = { ...freshScore, frozenAt };
+  scores[key] = frozen;
+  saveFrozenScores(scores);
+  return frozen;
+}
+
 // Récupère + calcule tout pour un ticker, sans toucher au DOM — réutilisable
 // pour la vue détaillée (runAnalysis) et le scan groupé (runScanAll).
 async function analyzeTicker(ticker, orbMinutes) {
@@ -298,6 +338,10 @@ async function analyzeTicker(ticker, orbMinutes) {
     throw new Error('Pas assez de données intraday (marché fermé ou ticker invalide)');
   }
   const analysis = computeIndicators(parsed, orbMinutes);
+
+  // Le score affiché est figé au moment de la première détection du breakout du jour —
+  // stable ensuite, même si tu rescans plusieurs fois dans la fenêtre.
+  analysis.setupScore = getOrFreezeScore(ticker, analysis.signal, analysis.setupScore);
 
   if (analysis.signal === 'bull' || analysis.signal === 'bear') {
     recordSignalToHistory(ticker, analysis, orbMinutes);
@@ -1099,6 +1143,7 @@ function renderSetupScore(a) {
     : 'Qualité de setup (ordre limite) — breakout confirmé';
 
   const detailsHtml = s.details.map(d => `<div style="padding:4px 0; font-size:12px; color:var(--text);">${escapeHtml(d)}</div>`).join('');
+  const frozenBadge = s.frozenAt ? `<div style="font-size:11px; color:var(--vwap); font-family:var(--mono); margin-top:4px;">🔒 Score figé à ${s.frozenAt} — stable pour le reste de la séance</div>` : '';
 
   return `
     <div class="indicator-card" style="margin-top:20px; border-color:${color}; ${s.isNeutral ? 'border-style:dashed;' : ''}">
@@ -1108,6 +1153,7 @@ function renderSetupScore(a) {
           <div class="indicator-label" style="margin-bottom:2px;">${cardTitle}</div>
           <div style="font-size:13px; font-weight:600; color:var(--text-bright);">${gradeVerdict[s.grade]}</div>
           <div style="font-size:11px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;">${s.points}/${s.maxPoints} points — score de règles, pas une probabilité statistique</div>
+          ${frozenBadge}
         </div>
       </div>
       ${detailsHtml}
