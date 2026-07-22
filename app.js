@@ -2,9 +2,29 @@
 // ORB SCANNER — logique principale
 // ============================================================
 
+// Chaque entrée : { build: fn(url) -> url proxifiée, parse: fn(responseText) -> JSON Yahoo }
+// Certains proxies renvoient le JSON brut, d'autres l'enveloppent dans { contents: "..." } (allorigins /get).
 const CORS_PROXIES = [
-  (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
-  (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+  {
+    name: 'allorigins-get',
+    build: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
+    parse: (text) => JSON.parse(JSON.parse(text).contents),
+  },
+  {
+    name: 'corsproxy.io',
+    build: (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`,
+    parse: (text) => JSON.parse(text),
+  },
+  {
+    name: 'allorigins-raw',
+    build: (url) => `https://api.allorigins.win/raw?url=${encodeURIComponent(url)}`,
+    parse: (text) => JSON.parse(text),
+  },
+  {
+    name: 'codetabs',
+    build: (url) => `https://api.codetabs.com/v1/proxy?quest=${encodeURIComponent(url)}`,
+    parse: (text) => JSON.parse(text),
+  },
 ];
 
 const els = {
@@ -50,21 +70,28 @@ async function runAnalysis() {
 async function fetchYahooData(ticker) {
   const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=5m&range=5d`;
 
-  let lastErr;
-  for (const proxyFn of CORS_PROXIES) {
+  const failures = [];
+  for (const proxy of CORS_PROXIES) {
     try {
-      const res = await fetch(proxyFn(yahooUrl));
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 8000);
+      const res = await fetch(proxy.build(yahooUrl), { signal: controller.signal });
+      clearTimeout(timeout);
+
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data = await res.json();
+      const text = await res.text();
+      const data = proxy.parse(text);
+
       if (data?.chart?.error) throw new Error(data.chart.error.description || 'Ticker introuvable');
-      if (!data?.chart?.result?.[0]) throw new Error('Réponse Yahoo vide');
-      return data;
+      if (!data?.chart?.result?.[0]) throw new Error('Réponse vide');
+
+      return data; // succès
     } catch (e) {
-      lastErr = e;
+      failures.push(`${proxy.name}: ${e.name === 'AbortError' ? 'timeout' : e.message}`);
       continue;
     }
   }
-  throw new Error(`Impossible de récupérer les données (${lastErr?.message || 'proxies indisponibles'}). Réessaie dans quelques secondes.`);
+  throw new Error(`Tous les proxies ont échoué — ${failures.join(' / ')}`);
 }
 
 function parseYahooResponse(raw) {
