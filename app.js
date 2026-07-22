@@ -391,6 +391,94 @@ function parseYahooResponse(raw) {
 // ------------------------------------------------------------
 // INDICATEURS
 // ------------------------------------------------------------
+// ------------------------------------------------------------
+// SCORE DE QUALITÉ DE SETUP (S/A/B/C/D/E)
+// ------------------------------------------------------------
+// Ce n'est PAS une probabilité statistique — aucun backtest historique ne soutient
+// un vrai pourcentage ici. C'est un score de règles : plus il est haut, plus le setup
+// présente les caractéristiques qu'on a identifiées comme favorables à un ORB (distance
+// raisonnable au niveau de breakout, confluence des filtres, range ni trop large ni trop
+// étroit, tendance franche, volume confirmé). Documenté et transparent, pas une boîte noire.
+function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, adx, relativeVolume, priceAboveVwap }) {
+  if (signal === 'neutral') {
+    return { grade: '—', points: 0, maxPoints: 0, details: ['Pas de breakout confirmé — score non applicable'] };
+  }
+
+  const isLong = signal === 'bull';
+  const breakoutLevel = isLong ? orbHigh : orbLow;
+  const distanceFromLevel = Math.abs(lastClose - breakoutLevel);
+  const distancePct = (distanceFromLevel / breakoutLevel) * 100;
+
+  let points = 0;
+  const maxPoints = 20;
+  const details = [];
+
+  // 1. Distance au niveau de breakout (max 6 pts) — critère le plus important pour
+  //    savoir si un ordre limite a encore un sens (sinon le prix ne reviendra jamais dessus)
+  let distanceTooFar = false;
+  if (distancePct < 0.15) {
+    points += 6; details.push(`✓ Prix encore très proche du niveau de breakout (+${distancePct.toFixed(2)}%) — ordre limite pertinent`);
+  } else if (distancePct < 0.4) {
+    points += 4; details.push(`~ Prix modérément éloigné du niveau (+${distancePct.toFixed(2)}%) — encore jouable`);
+  } else if (distancePct < 0.8) {
+    points += 2; details.push(`⚠ Prix déjà bien éloigné du niveau (+${distancePct.toFixed(2)}%) — ordre limite risque de ne jamais se déclencher`);
+    distanceTooFar = true;
+  } else {
+    points += 0; details.push(`✗ Prix trop loin du niveau de breakout (+${distancePct.toFixed(2)}%) — trop tard pour un ordre limite propre`);
+    distanceTooFar = true;
+  }
+
+  // 2. Qualité du range ORB vs ATR (max 5 pts) — un range ni trop large (risque énorme)
+  //    ni trop étroit (fakeout quasi garanti) par rapport à la volatilité normale du titre
+  const rangeToAtrRatio = orbRange / atr;
+  if (rangeToAtrRatio >= 0.8 && rangeToAtrRatio <= 2.5) {
+    points += 5; details.push(`✓ Range ORB bien proportionné à la volatilité (${rangeToAtrRatio.toFixed(1)}× ATR)`);
+  } else if (rangeToAtrRatio < 0.8) {
+    points += 2; details.push(`⚠ Range ORB étroit vs volatilité normale (${rangeToAtrRatio.toFixed(1)}× ATR) — risque de fakeout plus élevé`);
+  } else {
+    points += 2; details.push(`⚠ Range ORB très large (${rangeToAtrRatio.toFixed(1)}× ATR) — stop potentiellement coûteux`);
+  }
+
+  // 3. Force de la tendance ADX (max 5 pts)
+  if (adx > 30) {
+    points += 5; details.push(`✓ ADX ${adx.toFixed(0)} — tendance forte, bon terrain pour un breakout qui continue`);
+  } else if (adx > 20) {
+    points += 3; details.push(`~ ADX ${adx.toFixed(0)} — tendance modérée`);
+  } else {
+    points += 0; details.push(`✗ ADX ${adx.toFixed(0)} — marché en range, risque de retournement`);
+  }
+
+  // 4. Volume relatif (max 4 pts)
+  if (relativeVolume > 2) {
+    points += 4; details.push(`✓ Volume ${relativeVolume.toFixed(1)}× la normale — forte conviction`);
+  } else if (relativeVolume > 1.2) {
+    points += 2; details.push(`~ Volume ${relativeVolume.toFixed(1)}× la normale — correct`);
+  } else {
+    points += 0; details.push(`✗ Volume ${relativeVolume.toFixed(1)}× la normale — participation faible`);
+  }
+
+  const pct = points / maxPoints;
+  let grade;
+  if (pct >= 0.9) grade = 'S';
+  else if (pct >= 0.75) grade = 'A';
+  else if (pct >= 0.6) grade = 'B';
+  else if (pct >= 0.4) grade = 'C';
+  else if (pct >= 0.2) grade = 'D';
+  else grade = 'E';
+
+  // Plafond : si le prix est déjà trop loin du niveau de breakout, un ordre limite n'a
+  // plus vraiment de sens quel que soit le reste du contexte — donc le grade ne peut
+  // pas dépasser D, pour éviter qu'un bon ADX/volume masque ce problème pratique.
+  if (distanceTooFar) {
+    const gradeOrder = ['S', 'A', 'B', 'C', 'D', 'E'];
+    const currentIdx = gradeOrder.indexOf(grade);
+    const dIdx = gradeOrder.indexOf('D');
+    if (currentIdx < dIdx) grade = 'D';
+  }
+
+  return { grade, points, maxPoints, details, distancePct };
+}
+
 function computeIndicators(data, orbMinutes) {
   const { timestamps, opens, highs, lows, closes, volumes } = data;
 
@@ -493,13 +581,23 @@ function computeIndicators(data, orbMinutes) {
     short: { entry: shortEntry, stop: shortStop, target: shortTarget, stopCapped: shortStopCapped, rr: RR_RATIO },
   };
 
+  // --- Score de qualité de setup (pour décider si un ordre limite est pertinent) ---
+  // IMPORTANT : ceci n'est PAS une probabilité statistique de réussite — juste un score
+  // de qualité basé sur des règles connues (distance au niveau, confluence des filtres,
+  // qualité du range, force de tendance, volume). Un "S" ne garantit rien ; ça veut dire
+  // que le setup a les caractéristiques d'un bon setup ORB sur le papier.
+  const setupScore = computeSetupScore({
+    signal, lastClose, orbHigh, orbLow, orbRange, atr, adx, relativeVolume,
+    priceAboveVwap,
+  });
+
   return {
     orbHigh, orbLow, orbVolume, candlesPerOrb,
     lastClose, prevClose, currentVwap, vwapSeries,
     atr, adx, relativeVolume,
     signal, reasons,
     lastDayIdx,
-    tradeLevels,
+    tradeLevels, setupScore,
   };
 }
 
@@ -830,6 +928,7 @@ function renderResults(ticker, data, a, orbMinutes) {
       </div>
     </div>
 
+    ${renderSetupScore(a)}
     ${renderTradeLevels(a)}
   `;
 
@@ -841,6 +940,42 @@ function renderResults(ticker, data, a, orbMinutes) {
     // on relance simplement un scan complet (plus simple et toujours à jour).
     runScanAll();
   });
+}
+
+function renderSetupScore(a) {
+  const s = a.setupScore;
+
+  if (s.grade === '—') return ''; // pas de breakout, rien à afficher
+
+  const gradeColors = {
+    S: 'var(--bull)', A: 'var(--bull)', B: 'var(--warn)',
+    C: 'var(--warn)', D: 'var(--bear)', E: 'var(--bear)',
+  };
+  const gradeVerdict = {
+    S: 'Setup excellent — ordre limite proche du niveau a du sens',
+    A: 'Bon setup — ordre limite raisonnable',
+    B: 'Setup correct mais avec réserves — regarde les détails',
+    C: 'Setup moyen — sois prudent',
+    D: 'Setup faible — probablement à éviter',
+    E: 'Setup très faible — à éviter',
+  };
+  const color = gradeColors[s.grade];
+
+  const detailsHtml = s.details.map(d => `<div style="padding:4px 0; font-size:12px; color:var(--text);">${escapeHtml(d)}</div>`).join('');
+
+  return `
+    <div class="indicator-card" style="margin-top:20px; border-color:${color};">
+      <div style="display:flex; align-items:center; gap:16px; margin-bottom:10px;">
+        <div style="font-family:var(--mono); font-size:42px; font-weight:700; color:${color}; line-height:1;">${s.grade}</div>
+        <div>
+          <div class="indicator-label" style="margin-bottom:2px;">Qualité de setup (ordre limite)</div>
+          <div style="font-size:13px; font-weight:600; color:var(--text-bright);">${gradeVerdict[s.grade]}</div>
+          <div style="font-size:11px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;">${s.points}/${s.maxPoints} points — score de règles, pas une probabilité statistique</div>
+        </div>
+      </div>
+      ${detailsHtml}
+    </div>
+  `;
 }
 
 function renderTradeLevels(a) {
