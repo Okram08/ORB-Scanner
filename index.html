@@ -135,6 +135,21 @@
   #search-btn:hover { background: var(--bull); color: var(--bg); }
   #search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+  #history-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 13px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  #history-btn:hover { border-color: var(--vwap); color: var(--text); }
+
   /* Empty state */
   .empty-state {
     text-align: center;
@@ -480,6 +495,79 @@
     padding: 10px 0;
   }
 
+  /* Trade levels */
+  .trade-levels {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 20px;
+  }
+
+  @media (max-width: 700px) {
+    .trade-levels { grid-template-columns: 1fr; }
+  }
+
+  .trade-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px 18px;
+  }
+
+  .trade-card.active-long { border-color: var(--bull); background: rgba(74,155,127,0.06); }
+  .trade-card.active-short { border-color: var(--bear); background: rgba(196,85,74,0.06); }
+
+  .trade-card-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 12px;
+  }
+
+  .trade-card-title {
+    font-family: var(--mono);
+    font-weight: 700;
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  .trade-card-title.long-title { color: var(--bull); }
+  .trade-card-title.short-title { color: var(--bear); }
+
+  .trade-active-badge {
+    font-size: 10px;
+    font-family: var(--mono);
+    font-weight: 700;
+    padding: 2px 8px;
+    border-radius: 10px;
+    background: var(--warn);
+    color: #1A1206;
+  }
+
+  .trade-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 6px 0;
+    font-family: var(--mono);
+    font-size: 13px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .trade-row:last-child { border-bottom: none; }
+
+  .trade-row-label { color: var(--text-dim); font-family: var(--sans); font-size: 12px; }
+  .trade-row-value { font-weight: 700; color: var(--text-bright); }
+
+  .trade-card-note {
+    margin-top: 10px;
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--sans);
+    line-height: 1.5;
+  }
+
   .indicator-card {
     background: var(--bg-panel);
     border: 1px solid var(--border);
@@ -570,6 +658,7 @@
         <option value="30">Range: 30 min</option>
       </select>
       <button id="search-btn">Analyser</button>
+      <button id="history-btn" title="Voir l'historique des signaux">◷ Historique</button>
     </div>
   </header>
 
