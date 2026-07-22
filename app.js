@@ -6,6 +6,14 @@
 // Certains proxies renvoient le JSON brut, d'autres l'enveloppent dans { contents: "..." } (allorigins /get).
 const CORS_PROXIES = [
   {
+    name: 'cloudflare-worker',
+    build: (url) => {
+      const ticker = new URL(url).pathname.split('/').pop();
+      return `https://red-bush-d58eorbscanner.tom-vandendorpe.workers.dev/?ticker=${ticker}`;
+    },
+    parse: (text) => JSON.parse(text),
+  },
+  {
     name: 'allorigins-get',
     build: (url) => `https://api.allorigins.win/get?url=${encodeURIComponent(url)}`,
     parse: (text) => JSON.parse(JSON.parse(text).contents),
