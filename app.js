@@ -40,13 +40,110 @@ const els = {
   orbWindow: document.getElementById('orb-window'),
   btn: document.getElementById('search-btn'),
   content: document.getElementById('content'),
+  watchlistBar: document.getElementById('watchlist-bar'),
 };
 
 let chart = null;
 let candleSeries = null;
 
+const WATCHLIST_KEY = 'orb-scanner-watchlist';
+let watchlist = loadWatchlist();
+
+function loadWatchlist() {
+  try {
+    const raw = localStorage.getItem(WATCHLIST_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveWatchlist() {
+  try {
+    localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
+  } catch {
+    // stockage indisponible (navigation privée, quota) — on continue sans persister
+  }
+}
+
+function addToWatchlist(ticker) {
+  ticker = ticker.trim().toUpperCase();
+  if (!ticker || watchlist.includes(ticker)) return;
+  watchlist.push(ticker);
+  saveWatchlist();
+  renderWatchlistBar();
+}
+
+function removeFromWatchlist(ticker) {
+  watchlist = watchlist.filter(t => t !== ticker);
+  saveWatchlist();
+  renderWatchlistBar();
+}
+
+function renderWatchlistBar() {
+  const chips = watchlist.map(t => `
+    <div class="watchlist-chip" data-ticker="${t}">
+      ${t}
+      <button data-remove="${t}" title="Retirer">×</button>
+    </div>
+  `).join('');
+
+  els.watchlistBar.innerHTML = `
+    ${chips}
+    <div class="watchlist-add">
+      <input type="text" id="watchlist-input" placeholder="+ ticker" maxlength="10">
+      <button id="watchlist-add-btn">Ajouter</button>
+    </div>
+    <button id="scan-all-btn" ${watchlist.length === 0 ? 'disabled' : ''}>⚡ Scanner tout (${watchlist.length})</button>
+  `;
+
+  // ré-attacher les listeners (le HTML a été régénéré)
+  els.watchlistBar.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      removeFromWatchlist(btn.dataset.remove);
+    });
+  });
+
+  const wInput = document.getElementById('watchlist-input');
+  const wAddBtn = document.getElementById('watchlist-add-btn');
+  wAddBtn.addEventListener('click', () => {
+    addToWatchlist(wInput.value);
+    wInput.value = '';
+    wInput.focus();
+  });
+  wInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { addToWatchlist(wInput.value); wInput.value = ''; }
+  });
+
+  document.getElementById('scan-all-btn')?.addEventListener('click', runScanAll);
+
+  // clic sur un chip (hors bouton ×) → analyse détaillée directe
+  els.watchlistBar.querySelectorAll('.watchlist-chip').forEach(chip => {
+    chip.addEventListener('click', (e) => {
+      if (e.target.closest('button')) return;
+      els.input.value = chip.dataset.ticker;
+      runAnalysis();
+    });
+  });
+}
+
+renderWatchlistBar(); // rendu initial au chargement de la page
+
 els.btn.addEventListener('click', runAnalysis);
 els.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') runAnalysis(); });
+
+// Récupère + calcule tout pour un ticker, sans toucher au DOM — réutilisable
+// pour la vue détaillée (runAnalysis) et le scan groupé (runScanAll).
+async function analyzeTicker(ticker, orbMinutes) {
+  const raw = await fetchYahooData(ticker);
+  const parsed = parseYahooResponse(raw);
+  if (!parsed || parsed.closes.length < 20) {
+    throw new Error('Pas assez de données intraday (marché fermé ou ticker invalide)');
+  }
+  const analysis = computeIndicators(parsed, orbMinutes);
+  return { parsed, analysis };
+}
 
 async function runAnalysis() {
   const ticker = els.input.value.trim().toUpperCase();
@@ -58,12 +155,7 @@ async function runAnalysis() {
   els.btn.disabled = true;
 
   try {
-    const raw = await fetchYahooData(ticker);
-    const parsed = parseYahooResponse(raw);
-    if (!parsed || parsed.closes.length < 20) {
-      throw new Error('Pas assez de données intraday pour ce ticker (marché fermé ou ticker invalide).');
-    }
-    const analysis = computeIndicators(parsed, orbMinutes);
+    const { parsed, analysis } = await analyzeTicker(ticker, orbMinutes);
     renderResults(ticker, parsed, analysis, orbMinutes);
   } catch (err) {
     setError(ticker, err.message);
@@ -71,6 +163,110 @@ async function runAnalysis() {
     els.btn.disabled = false;
   }
 }
+
+// ------------------------------------------------------------
+// SCAN GROUPÉ — watchlist entière en parallèle
+// ------------------------------------------------------------
+async function runScanAll() {
+  if (watchlist.length === 0) return;
+
+  const orbMinutes = parseInt(els.orbWindow.value, 10);
+  const scanBtn = document.getElementById('scan-all-btn');
+  if (scanBtn) { scanBtn.disabled = true; scanBtn.textContent = '⚡ Scan en cours...'; }
+
+  // état initial : tout en "loading"
+  const results = {};
+  watchlist.forEach(t => { results[t] = { status: 'loading' }; });
+  renderScanTable(results, orbMinutes);
+
+  // lancer toutes les requêtes en parallèle, mettre à jour la ligne dès qu'un ticker répond
+  await Promise.all(watchlist.map(async (ticker) => {
+    try {
+      const { analysis } = await analyzeTicker(ticker, orbMinutes);
+      results[ticker] = { status: 'done', analysis };
+    } catch (err) {
+      results[ticker] = { status: 'error', message: err.message };
+    }
+    renderScanTable(results, orbMinutes);
+  }));
+
+  if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = `⚡ Scanner tout (${watchlist.length})`; }
+}
+
+function renderScanTable(results, orbMinutes) {
+  const rows = watchlist.map(ticker => {
+    const r = results[ticker];
+
+    if (!r || r.status === 'loading') {
+      return `
+        <tr class="scan-row" data-ticker="${ticker}">
+          <td class="scan-ticker">${ticker}</td>
+          <td colspan="5"><span class="scan-signal-cell"><span class="scan-signal-dot dot-loading"></span>Analyse en cours...</span></td>
+        </tr>`;
+    }
+
+    if (r.status === 'error') {
+      return `
+        <tr class="scan-row" data-ticker="${ticker}">
+          <td class="scan-ticker">${ticker}</td>
+          <td colspan="5"><span class="scan-signal-cell"><span class="scan-signal-dot dot-error"></span>${escapeHtml(r.message)}</span></td>
+        </tr>`;
+    }
+
+    const a = r.analysis;
+    const signalMeta = {
+      bull: { dot: 'dot-bull', label: 'BREAKOUT HAUSSIER', row: 'row-bull' },
+      bear: { dot: 'dot-bear', label: 'BREAKOUT BAISSIER', row: 'row-bear' },
+      neutral: { dot: 'dot-neutral', label: 'Neutre', row: '' },
+    }[a.signal];
+
+    const change = a.lastClose - a.prevClose;
+    const changePct = (change / a.prevClose) * 100;
+    const isUp = change >= 0;
+
+    return `
+      <tr class="scan-row ${signalMeta.row}" data-ticker="${ticker}">
+        <td class="scan-ticker">${ticker}</td>
+        <td>
+          <span class="scan-signal-cell">
+            <span class="scan-signal-dot ${signalMeta.dot}"></span>${signalMeta.label}
+          </span>
+        </td>
+        <td>${a.lastClose.toFixed(2)}</td>
+        <td class="${isUp ? 'up' : 'down'}">${isUp ? '+' : ''}${changePct.toFixed(2)}%</td>
+        <td>ADX ${a.adx.toFixed(0)}</td>
+        <td>Vol ${a.relativeVolume.toFixed(1)}x</td>
+      </tr>`;
+  }).join('');
+
+  els.content.innerHTML = `
+    <table class="scan-table">
+      <thead>
+        <tr>
+          <th>Ticker</th>
+          <th>Signal</th>
+          <th>Prix</th>
+          <th>Var. jour</th>
+          <th>ADX</th>
+          <th>Vol. relatif</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+  `;
+
+  // clic sur une ligne (déjà résolue) → vue détaillée de ce ticker
+  els.content.querySelectorAll('.scan-row').forEach(row => {
+    const ticker = row.dataset.ticker;
+    if (results[ticker]?.status === 'done') {
+      row.addEventListener('click', () => {
+        els.input.value = ticker;
+        runAnalysis();
+      });
+    }
+  });
+}
+
 
 // ------------------------------------------------------------
 // FETCH — Yahoo Finance via proxy CORS (fallback en cascade)
@@ -311,6 +507,7 @@ function renderResults(ticker, data, a, orbMinutes) {
   }[a.signal];
 
   els.content.innerHTML = `
+    ${watchlist.length > 0 ? `<button class="back-to-scan" id="back-to-scan-btn">← Retour au scan (${watchlist.length} tickers)</button>` : ''}
     <div class="ticker-header">
       <div style="display:flex; align-items:center; gap:14px;">
         <div class="ticker-id">${ticker}</div>
@@ -348,6 +545,13 @@ function renderResults(ticker, data, a, orbMinutes) {
   `;
 
   renderChart(data, a);
+
+  document.getElementById('back-to-scan-btn')?.addEventListener('click', () => {
+    const orbMinutes = parseInt(els.orbWindow.value, 10);
+    // Ré-affiche le dernier scan sans refaire les requêtes réseau si possible :
+    // on relance simplement un scan complet (plus simple et toujours à jour).
+    runScanAll();
+  });
 }
 
 function renderIndicatorCard(label, value, unit, subtext, tagType) {
