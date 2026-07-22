@@ -42,6 +42,7 @@ const els = {
   content: document.getElementById('content'),
   watchlistBar: document.getElementById('watchlist-bar'),
   sessionStatusBar: document.getElementById('session-status-bar'),
+  balanceBar: document.getElementById('balance-bar'),
 };
 
 // ------------------------------------------------------------
@@ -100,6 +101,101 @@ function renderSessionStatus() {
 
 renderSessionStatus();
 setInterval(renderSessionStatus, 60000); // rafraîchit chaque minute
+
+// ------------------------------------------------------------
+// BALANCE & GESTION DU RISQUE — persistant, pour calculer la taille
+// de position optimale sur chaque trade (montant risqué = % fixe de la balance)
+// ------------------------------------------------------------
+const BALANCE_KEY = 'orb-scanner-balance';
+const RISK_PCT_KEY = 'orb-scanner-risk-pct';
+const DEFAULT_RISK_PCT = 1; // 1% de la balance risqué par trade, par défaut
+
+function loadBalance() {
+  try {
+    const raw = localStorage.getItem(BALANCE_KEY);
+    return raw ? parseFloat(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function saveBalance(value) {
+  try { localStorage.setItem(BALANCE_KEY, String(value)); } catch { /* quota / navigation privée */ }
+}
+
+function loadRiskPct() {
+  try {
+    const raw = localStorage.getItem(RISK_PCT_KEY);
+    return raw ? parseFloat(raw) : DEFAULT_RISK_PCT;
+  } catch {
+    return DEFAULT_RISK_PCT;
+  }
+}
+
+function saveRiskPct(value) {
+  try { localStorage.setItem(RISK_PCT_KEY, String(value)); } catch { /* quota / navigation privée */ }
+}
+
+let userBalance = loadBalance();
+let riskPct = loadRiskPct();
+
+function renderBalanceBar() {
+  if (userBalance === null) {
+    els.balanceBar.innerHTML = `
+      <div class="balance-bar">
+        <span class="balance-label">Balance :</span>
+        <span class="balance-not-set" id="set-balance-link" style="cursor:pointer; text-decoration:underline;">renseigner ma balance pour calculer la taille de position optimale</span>
+      </div>`;
+    document.getElementById('set-balance-link').addEventListener('click', promptEditBalance);
+    return;
+  }
+
+  els.balanceBar.innerHTML = `
+    <div class="balance-bar">
+      <span class="balance-label">Balance :</span>
+      <span class="balance-value" id="balance-display">${userBalance.toLocaleString('fr-BE', { maximumFractionDigits: 0 })} $</span>
+      <span class="risk-pct">Risque par trade :</span>
+      <span class="risk-pct-value" id="risk-pct-display">${riskPct}%</span>
+      <span class="risk-pct" style="margin-left:auto; color:var(--text-dim);">(${(userBalance * riskPct / 100).toLocaleString('fr-BE', { maximumFractionDigits: 0 })} $ risqués / trade)</span>
+    </div>`;
+
+  document.getElementById('balance-display').addEventListener('click', promptEditBalance);
+  document.getElementById('risk-pct-display').addEventListener('click', promptEditRiskPct);
+}
+
+function promptEditBalance() {
+  const input = prompt('Ta balance de trading actuelle ($) :', userBalance !== null ? userBalance : '');
+  if (input === null) return; // annulé
+  const value = parseFloat(input.replace(',', '.'));
+  if (isNaN(value) || value <= 0) { alert('Montant invalide.'); return; }
+  userBalance = value;
+  saveBalance(value);
+  renderBalanceBar();
+}
+
+function promptEditRiskPct() {
+  const input = prompt('Pourcentage de la balance à risquer par trade (%) :', riskPct);
+  if (input === null) return;
+  const value = parseFloat(input.replace(',', '.'));
+  if (isNaN(value) || value <= 0 || value > 100) { alert('Pourcentage invalide.'); return; }
+  riskPct = value;
+  saveRiskPct(value);
+  renderBalanceBar();
+}
+
+renderBalanceBar();
+
+// Calcule la taille de position optimale pour un niveau de trade donné (long ou short),
+// en fonction de la balance et du % de risque renseignés. Retourne null si la balance
+// n'est pas encore renseignée (pas de calcul possible).
+function computePositionSize(entry, stop) {
+  if (userBalance === null) return null;
+  const riskAmount = userBalance * (riskPct / 100);
+  const stopDistance = Math.abs(entry - stop);
+  if (stopDistance <= 0) return null;
+  const shares = Math.floor(riskAmount / stopDistance);
+  return { shares, riskAmount, stopDistance };
+}
 
 let chart = null;
 let candleSeries = null;
@@ -1028,6 +1124,16 @@ function renderTradeLevels(a) {
   const riskShort = short.stop - short.entry;
   const rewardShort = short.entry - short.target;
 
+  const sizingLong = computePositionSize(long.entry, long.stop);
+  const sizingShort = computePositionSize(short.entry, short.stop);
+
+  const renderSizingRow = (sizing) => {
+    if (!sizing) {
+      return `<div class="position-size-row"><span class="label">Taille de position</span><span class="value" style="color:var(--text-dim); font-weight:400;">renseigne ta balance ci-dessus</span></div>`;
+    }
+    return `<div class="position-size-row"><span class="label">Taille optimale (${riskPct}% risqué)</span><span class="value">${sizing.shares} actions <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(~${sizing.riskAmount.toFixed(0)}$ risqués)</span></span></div>`;
+  };
+
   return `
     <div class="trade-levels">
       <div class="trade-card ${isLongActive ? 'active-long' : ''}">
@@ -1039,6 +1145,7 @@ function renderTradeLevels(a) {
         <div class="trade-row"><span class="trade-row-label">Stop-loss</span><span class="trade-row-value" style="color:var(--bear)">${long.stop.toFixed(2)}</span></div>
         <div class="trade-row"><span class="trade-row-label">Take-profit (${long.rr}:1)</span><span class="trade-row-value" style="color:var(--bull)">${long.target.toFixed(2)}</span></div>
         <div class="trade-row"><span class="trade-row-label">Risque / Reward</span><span class="trade-row-value">${riskLong.toFixed(2)} / ${rewardLong.toFixed(2)}</span></div>
+        ${renderSizingRow(sizingLong)}
         <div class="trade-card-note">${long.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
       </div>
 
@@ -1051,6 +1158,7 @@ function renderTradeLevels(a) {
         <div class="trade-row"><span class="trade-row-label">Stop-loss</span><span class="trade-row-value" style="color:var(--bear)">${short.stop.toFixed(2)}</span></div>
         <div class="trade-row"><span class="trade-row-label">Take-profit (${short.rr}:1)</span><span class="trade-row-value" style="color:var(--bull)">${short.target.toFixed(2)}</span></div>
         <div class="trade-row"><span class="trade-row-label">Risque / Reward</span><span class="trade-row-value">${riskShort.toFixed(2)} / ${rewardShort.toFixed(2)}</span></div>
+        ${renderSizingRow(sizingShort)}
         <div class="trade-card-note">${short.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
       </div>
     </div>
