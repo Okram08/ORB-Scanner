@@ -41,7 +41,65 @@ const els = {
   btn: document.getElementById('search-btn'),
   content: document.getElementById('content'),
   watchlistBar: document.getElementById('watchlist-bar'),
+  sessionStatusBar: document.getElementById('session-status-bar'),
 };
+
+// ------------------------------------------------------------
+// FENÊTRE DE TRADING — 9h30-11h00 heure de marché US (America/New_York),
+// soit ta fenêtre stratégique de 1h30 après l'ouverture. Calculé en heure
+// de marché US directement (via Intl), donc pas de bug de décalage
+// été/hiver Europe-US à gérer à la main.
+// ------------------------------------------------------------
+const SESSION_START_MIN = 9 * 60 + 30;  // 9h30 ET = ouverture NYSE/Nasdaq
+const SESSION_END_MIN = 11 * 60;         // 11h00 ET = fin de la fenêtre ORB stratégique (1h30 après l'ouverture)
+
+function getMarketTimeInfo() {
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour: '2-digit', minute: '2-digit', hour12: false,
+    weekday: 'short',
+  }).formatToParts(now);
+
+  const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
+  const minute = parseInt(parts.find(p => p.type === 'minute').value, 10);
+  const weekday = parts.find(p => p.type === 'weekday').value;
+  const totalMin = hour * 60 + minute;
+  const isWeekend = weekday === 'Sat' || weekday === 'Sun';
+
+  return { totalMin, isWeekend, hour, minute };
+}
+
+function renderSessionStatus() {
+  const { totalMin, isWeekend } = getMarketTimeInfo();
+
+  // Convertit une minute-du-jour US en heure locale du navigateur, pour affichage
+  const formatLocalTime = (marketMinutes) => {
+    const now = new Date();
+    const marketNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
+    const diffFromMarketMidnight = marketMinutes - (marketNow.getHours() * 60 + marketNow.getMinutes());
+    const target = new Date(now.getTime() + diffFromMarketMidnight * 60000);
+    return target.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  };
+
+  let html;
+  if (isWeekend) {
+    html = `<div class="session-status session-closed"><span class="dot"></span>Marché fermé (week-end)<span class="session-detail">La fenêtre ORB reprendra lundi à l'ouverture</span></div>`;
+  } else if (totalMin < SESSION_START_MIN) {
+    const untilOpen = SESSION_START_MIN - totalMin;
+    html = `<div class="session-status session-upcoming"><span class="dot"></span>Ouverture dans ${Math.floor(untilOpen / 60)}h${String(untilOpen % 60).padStart(2, '0')}<span class="session-detail">Fenêtre de trading : ${formatLocalTime(SESSION_START_MIN)} – ${formatLocalTime(SESSION_END_MIN)} (ton heure locale)</span></div>`;
+  } else if (totalMin <= SESSION_END_MIN) {
+    const remaining = SESSION_END_MIN - totalMin;
+    html = `<div class="session-status session-active"><span class="dot"></span>Dans la fenêtre — ${Math.floor(remaining / 60)}h${String(remaining % 60).padStart(2, '0')} restantes<span class="session-detail">C'est le moment de scanner ta watchlist</span></div>`;
+  } else {
+    html = `<div class="session-status session-closed"><span class="dot"></span>Fenêtre fermée pour aujourd'hui<span class="session-detail">L'edge ORB s'érode après 1h30 — pas la peine de rester devant l'écran</span></div>`;
+  }
+
+  els.sessionStatusBar.innerHTML = html;
+}
+
+renderSessionStatus();
+setInterval(renderSessionStatus, 60000); // rafraîchit chaque minute
 
 let chart = null;
 let candleSeries = null;
