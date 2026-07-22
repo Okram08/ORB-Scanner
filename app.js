@@ -363,6 +363,12 @@ function renderIndicatorCard(label, value, unit, subtext, tagType) {
 
 function renderChart(data, a) {
   const container = document.getElementById('chart-container');
+
+  if (typeof LightweightCharts === 'undefined') {
+    container.innerHTML = `<div class="error-state">La librairie de graphique n'a pas pu se charger (CDN indisponible). Les indicateurs ci-contre restent valides — recharge la page dans quelques secondes.</div>`;
+    return;
+  }
+
   container.innerHTML = '';
 
   chart = LightweightCharts.createChart(container, {
