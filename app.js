@@ -265,7 +265,7 @@ function renderScanTable(results, orbMinutes) {
       return `
         <tr class="scan-row" data-ticker="${ticker}">
           <td class="scan-ticker">${ticker}</td>
-          <td colspan="5"><span class="scan-signal-cell"><span class="scan-signal-dot dot-loading"></span>Analyse en cours...</span></td>
+          <td colspan="6"><span class="scan-signal-cell"><span class="scan-signal-dot dot-loading"></span>Analyse en cours...</span></td>
         </tr>`;
     }
 
@@ -273,7 +273,7 @@ function renderScanTable(results, orbMinutes) {
       return `
         <tr class="scan-row" data-ticker="${ticker}">
           <td class="scan-ticker">${ticker}</td>
-          <td colspan="5"><span class="scan-signal-cell"><span class="scan-signal-dot dot-error"></span>${escapeHtml(r.message)}</span></td>
+          <td colspan="6"><span class="scan-signal-cell"><span class="scan-signal-dot dot-error"></span>${escapeHtml(r.message)}</span></td>
         </tr>`;
     }
 
@@ -288,6 +288,10 @@ function renderScanTable(results, orbMinutes) {
     const changePct = (change / a.prevClose) * 100;
     const isUp = change >= 0;
 
+    const gradeColors = { S: 'var(--bull)', A: 'var(--bull)', B: 'var(--warn)', C: 'var(--warn)', D: 'var(--bear)', E: 'var(--bear)' };
+    const scoreColor = gradeColors[a.setupScore.grade] || 'var(--text-dim)';
+    const scoreCell = `<span style="font-weight:700; color:${scoreColor};">${a.setupScore.grade}</span>${a.setupScore.isNeutral ? '<span style="color:var(--text-dim); font-size:11px;"> (approche)</span>' : ''}`;
+
     return `
       <tr class="scan-row ${signalMeta.row}" data-ticker="${ticker}">
         <td class="scan-ticker">${ticker}</td>
@@ -296,6 +300,7 @@ function renderScanTable(results, orbMinutes) {
             <span class="scan-signal-dot ${signalMeta.dot}"></span>${signalMeta.label}
           </span>
         </td>
+        <td>${scoreCell}</td>
         <td>${a.lastClose.toFixed(2)}</td>
         <td class="${isUp ? 'up' : 'down'}">${isUp ? '+' : ''}${changePct.toFixed(2)}%</td>
         <td>ADX ${a.adx.toFixed(0)}</td>
@@ -309,6 +314,7 @@ function renderScanTable(results, orbMinutes) {
         <tr>
           <th>Ticker</th>
           <th>Signal</th>
+          <th>Score</th>
           <th>Prix</th>
           <th>Var. jour</th>
           <th>ADX</th>
@@ -400,23 +406,46 @@ function parseYahooResponse(raw) {
 // raisonnable au niveau de breakout, confluence des filtres, range ni trop large ni trop
 // étroit, tendance franche, volume confirmé). Documenté et transparent, pas une boîte noire.
 function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, adx, relativeVolume, priceAboveVwap }) {
-  if (signal === 'neutral') {
-    return { grade: '—', points: 0, maxPoints: 0, details: ['Pas de breakout confirmé — score non applicable'] };
-  }
-
-  const isLong = signal === 'bull';
+  // Cas "neutre" (pas encore de breakout confirmé) : on évalue quand même un score,
+  // basé sur le côté du range le plus proche du prix actuel — utile pour repérer à
+  // l'avance les tickers qui approchent d'un niveau avec un bon contexte, avant même
+  // que le franchissement + la confluence des filtres ne confirment le signal.
+  const distToHigh = orbHigh - lastClose;
+  const distToLow = lastClose - orbLow;
+  const isNeutral = signal === 'neutral';
+  const isLong = isNeutral ? (distToHigh <= distToLow) : (signal === 'bull');
   const breakoutLevel = isLong ? orbHigh : orbLow;
-  const distanceFromLevel = Math.abs(lastClose - breakoutLevel);
+
+  // Si le prix n'a pas encore cassé, la "distance" est comptée comme négative
+  // (encore à l'intérieur du range) — donc pas de malus de type "trop loin",
+  // juste une indication de proximité au niveau.
+  const rawDistance = isLong ? (lastClose - breakoutLevel) : (breakoutLevel - lastClose);
+  const distanceFromLevel = Math.abs(rawDistance);
   const distancePct = (distanceFromLevel / breakoutLevel) * 100;
+  const notYetBroken = rawDistance < 0; // le prix est encore dans le range, côté évalué
 
   let points = 0;
   const maxPoints = 20;
   const details = [];
 
+  if (isNeutral) {
+    details.push(`ℹ Pas encore de breakout confirmé — score indicatif côté ${isLong ? 'haussier (ORB High)' : 'baissier (ORB Low)'}, le plus proche actuellement`);
+  }
+
   // 1. Distance au niveau de breakout (max 6 pts) — critère le plus important pour
-  //    savoir si un ordre limite a encore un sens (sinon le prix ne reviendra jamais dessus)
+  //    savoir si un ordre limite a encore un sens. Si le prix n'a pas encore cassé,
+  //    être proche du niveau est un BON signe (approche imminente) ; si le prix a déjà
+  //    cassé, être loin est un MAUVAIS signe (le mouvement est déjà fait).
   let distanceTooFar = false;
-  if (distancePct < 0.15) {
+  if (notYetBroken) {
+    if (distancePct < 0.15) {
+      points += 6; details.push(`✓ Prix tout proche du niveau ${isLong ? 'ORB High' : 'ORB Low'} (${distancePct.toFixed(2)}%) — cassure imminente possible`);
+    } else if (distancePct < 0.4) {
+      points += 4; details.push(`~ Prix se rapproche du niveau (${distancePct.toFixed(2)}%) — à surveiller`);
+    } else {
+      points += 2; details.push(`Prix encore loin du niveau (${distancePct.toFixed(2)}%) — rien d'imminent`);
+    }
+  } else if (distancePct < 0.15) {
     points += 6; details.push(`✓ Prix encore très proche du niveau de breakout (+${distancePct.toFixed(2)}%) — ordre limite pertinent`);
   } else if (distancePct < 0.4) {
     points += 4; details.push(`~ Prix modérément éloigné du niveau (+${distancePct.toFixed(2)}%) — encore jouable`);
@@ -476,7 +505,17 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
     if (currentIdx < dIdx) grade = 'D';
   }
 
-  return { grade, points, maxPoints, details, distancePct };
+  // Plafond additionnel : tant qu'aucun breakout n'est confirmé (signal encore neutre),
+  // le grade ne peut pas dépasser B — un bon contexte n'est qu'une anticipation, pas
+  // un signal validé par la confluence VWAP + ADX + volume sur un vrai franchissement.
+  if (isNeutral) {
+    const gradeOrder = ['S', 'A', 'B', 'C', 'D', 'E'];
+    const currentIdx = gradeOrder.indexOf(grade);
+    const bIdx = gradeOrder.indexOf('B');
+    if (currentIdx < bIdx) grade = 'B';
+  }
+
+  return { grade, points, maxPoints, details, distancePct, isNeutral, isLong };
 }
 
 function computeIndicators(data, orbMinutes) {
@@ -945,8 +984,6 @@ function renderResults(ticker, data, a, orbMinutes) {
 function renderSetupScore(a) {
   const s = a.setupScore;
 
-  if (s.grade === '—') return ''; // pas de breakout, rien à afficher
-
   const gradeColors = {
     S: 'var(--bull)', A: 'var(--bull)', B: 'var(--warn)',
     C: 'var(--warn)', D: 'var(--bear)', E: 'var(--bear)',
@@ -954,21 +991,24 @@ function renderSetupScore(a) {
   const gradeVerdict = {
     S: 'Setup excellent — ordre limite proche du niveau a du sens',
     A: 'Bon setup — ordre limite raisonnable',
-    B: 'Setup correct mais avec réserves — regarde les détails',
+    B: s.isNeutral ? 'En approche — surveille, mais pas encore de breakout confirmé' : 'Setup correct mais avec réserves — regarde les détails',
     C: 'Setup moyen — sois prudent',
     D: 'Setup faible — probablement à éviter',
     E: 'Setup très faible — à éviter',
   };
   const color = gradeColors[s.grade];
+  const cardTitle = s.isNeutral
+    ? `Score indicatif — pas encore de breakout confirmé (côté ${s.isLong ? 'ORB High' : 'ORB Low'})`
+    : 'Qualité de setup (ordre limite) — breakout confirmé';
 
   const detailsHtml = s.details.map(d => `<div style="padding:4px 0; font-size:12px; color:var(--text);">${escapeHtml(d)}</div>`).join('');
 
   return `
-    <div class="indicator-card" style="margin-top:20px; border-color:${color};">
+    <div class="indicator-card" style="margin-top:20px; border-color:${color}; ${s.isNeutral ? 'border-style:dashed;' : ''}">
       <div style="display:flex; align-items:center; gap:16px; margin-bottom:10px;">
         <div style="font-family:var(--mono); font-size:42px; font-weight:700; color:${color}; line-height:1;">${s.grade}</div>
         <div>
-          <div class="indicator-label" style="margin-bottom:2px;">Qualité de setup (ordre limite)</div>
+          <div class="indicator-label" style="margin-bottom:2px;">${cardTitle}</div>
           <div style="font-size:13px; font-weight:600; color:var(--text-bright);">${gradeVerdict[s.grade]}</div>
           <div style="font-size:11px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;">${s.points}/${s.maxPoints} points — score de règles, pas une probabilité statistique</div>
         </div>
