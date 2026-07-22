@@ -194,7 +194,8 @@ function computePositionSize(entry, stop) {
   const stopDistance = Math.abs(entry - stop);
   if (stopDistance <= 0) return null;
   const shares = Math.floor(riskAmount / stopDistance);
-  return { shares, riskAmount, stopDistance };
+  const positionValue = shares * entry; // montant total à engager sur l'ordre
+  return { shares, riskAmount, stopDistance, positionValue };
 }
 
 let chart = null;
@@ -1129,9 +1130,9 @@ function renderTradeLevels(a) {
 
   const renderSizingRow = (sizing) => {
     if (!sizing) {
-      return `<div class="position-size-row"><span class="label">Taille de position</span><span class="value" style="color:var(--text-dim); font-weight:400;">renseigne ta balance ci-dessus</span></div>`;
+      return `<div class="position-size-row"><span class="label">Montant à investir</span><span class="value" style="color:var(--text-dim); font-weight:400;">renseigne ta balance ci-dessus</span></div>`;
     }
-    return `<div class="position-size-row"><span class="label">Taille optimale (${riskPct}% risqué)</span><span class="value">${sizing.shares} actions <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(~${sizing.riskAmount.toFixed(0)}$ risqués)</span></span></div>`;
+    return `<div class="position-size-row"><span class="label">Montant à investir (${riskPct}% risqué)</span><span class="value">${sizing.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 0 })}$ <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(${sizing.shares} actions · ~${sizing.riskAmount.toFixed(0)}$ risqués si SL touché)</span></span></div>`;
   };
 
   return `
