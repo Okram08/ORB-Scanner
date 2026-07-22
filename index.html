@@ -150,6 +150,42 @@
 
   #history-btn:hover { border-color: var(--vwap); color: var(--text); }
 
+  /* Fenêtre de trading */
+  .session-status {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    border-radius: 8px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 600;
+    margin-top: 16px;
+    border: 1px solid;
+  }
+
+  .session-status .dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  .session-active { background: rgba(74,155,127,0.08); border-color: var(--bull); color: var(--bull); }
+  .session-active .dot { background: var(--bull); box-shadow: 0 0 8px var(--bull); animation: pulse 1.5s ease-in-out infinite; }
+
+  .session-upcoming { background: rgba(212,162,76,0.08); border-color: var(--warn); color: var(--warn); }
+  .session-upcoming .dot { background: var(--warn); }
+
+  .session-closed { background: var(--bg-panel); border-color: var(--border); color: var(--text-dim); }
+  .session-closed .dot { background: var(--text-dim); }
+
+  .session-detail {
+    font-family: var(--sans);
+    font-weight: 400;
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+
   /* Empty state */
   .empty-state {
     text-align: center;
@@ -661,6 +697,8 @@
       <button id="history-btn" title="Voir l'historique des signaux">◷ Historique</button>
     </div>
   </header>
+
+  <div id="session-status-bar"></div>
 
   <div class="watchlist-bar" id="watchlist-bar">
     <!-- rempli dynamiquement par app.js -->
