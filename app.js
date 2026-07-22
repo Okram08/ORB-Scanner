@@ -345,10 +345,6 @@ async function analyzeTicker(ticker, orbMinutes) {
   // stable ensuite, même si tu rescans plusieurs fois dans la fenêtre.
   analysis.setupScore = getOrFreezeScore(ticker, analysis.signal, analysis.setupScore);
 
-  if (analysis.signal === 'bull' || analysis.signal === 'bear') {
-    recordSignalToHistory(ticker, analysis, orbMinutes);
-  }
-
   return { parsed, analysis };
 }
 
@@ -806,58 +802,42 @@ function saveHistory(history) {
   }
 }
 
-// Une entrée = un signal confirmé pour un ticker un jour donné.
-// Clé de dédoublonnage : ticker + jour + direction du signal (pas d'entrée en double
-// si tu rescans le même ticker plusieurs fois dans la même séance).
-function recordSignalToHistory(ticker, analysis, orbMinutes) {
+// Ajoute manuellement un trade au journal de suivi — appelé uniquement quand tu cliques
+// "+ Ajouter au suivi" sur une carte Long/Short. Pas de dédoublonnage automatique : si tu
+// cliques plusieurs fois, ça ajoute plusieurs lignes (au cas où tu prends le même ticker
+// à deux reprises dans la même journée, ce qui est ton choix, pas une erreur à filtrer).
+function addTradeToHistory({ ticker, direction, entry, stop, target, positionValue, shares, orbMinutes }) {
   const history = loadHistory();
   const today = new Date().toISOString().slice(0, 10);
-  const dedupeKey = `${ticker}|${today}|${analysis.signal}`;
-
-  if (history.some(h => h.dedupeKey === dedupeKey)) return; // déjà enregistré aujourd'hui
-
-  const levels = analysis.signal === 'bull' ? analysis.tradeLevels.long : analysis.tradeLevels.short;
 
   history.unshift({
-    dedupeKey,
+    id: `${ticker}-${Date.now()}`,
     ticker,
     date: today,
     timestamp: Date.now(),
-    signal: analysis.signal,
+    direction, // 'long' ou 'short'
     orbMinutes,
-    entry: levels.entry,
-    stop: levels.stop,
-    target: levels.target,
-    priceAtSignal: analysis.lastClose,
-    adx: analysis.adx,
-    relativeVolume: analysis.relativeVolume,
+    entry, stop, target,
+    positionValue: positionValue ?? null,
+    shares: shares ?? null,
+    outcome: 'pending', // 'pending' | 'win' | 'loss' | 'breakeven' — modifiable manuellement dans l'historique
   });
 
   saveHistory(history.slice(0, HISTORY_MAX_ENTRIES));
 }
 
-// Détermine si un trade historique a depuis touché son TP ou son SL,
-// en se basant sur les données intraday les plus récentes déjà chargées pour ce ticker.
-// Best-effort : si on n'a pas re-fetché ce ticker depuis, le statut reste "en cours".
-function evaluateHistoryOutcome(entry, freshData) {
-  if (!freshData) return 'pending';
-
-  const isLong = entry.signal === 'bull';
-  // on ne regarde que les bougies postérieures au moment du signal
-  const relevantIdx = freshData.timestamps
-    .map((t, i) => ({ t, i }))
-    .filter(({ t }) => t * 1000 >= entry.timestamp);
-
-  for (const { i } of relevantIdx) {
-    if (isLong) {
-      if (freshData.lows[i] <= entry.stop) return 'loss';
-      if (freshData.highs[i] >= entry.target) return 'win';
-    } else {
-      if (freshData.highs[i] >= entry.stop) return 'loss';
-      if (freshData.lows[i] <= entry.target) return 'win';
-    }
+function updateTradeOutcome(id, outcome) {
+  const history = loadHistory();
+  const trade = history.find(h => h.id === id);
+  if (trade) {
+    trade.outcome = outcome;
+    saveHistory(history);
   }
-  return 'pending';
+}
+
+function deleteTradeFromHistory(id) {
+  const history = loadHistory().filter(h => h.id !== id);
+  saveHistory(history);
 }
 
 function renderHistoryPage() {
@@ -868,28 +848,37 @@ function renderHistoryPage() {
       ${renderBackToScanIfNeeded()}
       <div class="empty-state">
         <div class="glyph">◷</div>
-        <p>Aucun signal confirmé enregistré pour l'instant. Dès qu'un breakout haussier ou baissier valide apparaît sur un ticker analysé, il est ajouté ici automatiquement.</p>
+        <p>Ton journal de suivi est vide. Depuis une carte Long ou Short, clique "+ Ajouter au suivi" pour enregistrer un trade que tu as réellement pris.</p>
       </div>
     `;
     return;
   }
 
-  const wins = history.filter(h => h._outcome === 'win').length;
-  const losses = history.filter(h => h._outcome === 'loss').length;
-  const pending = history.filter(h => !h._outcome || h._outcome === 'pending').length;
+  const wins = history.filter(h => h.outcome === 'win').length;
+  const losses = history.filter(h => h.outcome === 'loss').length;
+  const breakeven = history.filter(h => h.outcome === 'breakeven').length;
+  const pending = history.filter(h => h.outcome === 'pending').length;
   const resolved = wins + losses;
   const winrate = resolved > 0 ? ((wins / resolved) * 100).toFixed(0) : '—';
 
   const rows = history.map(h => {
-    const outcome = h._outcome || 'pending';
     const outcomeMeta = {
-      win: { label: 'TP touché', cls: 'tag-good' },
-      loss: { label: 'SL touché', cls: 'tag-bad' },
+      win: { label: 'Gagné', cls: 'tag-good' },
+      loss: { label: 'Perdu', cls: 'tag-bad' },
+      breakeven: { label: 'Neutre', cls: 'tag-warn' },
       pending: { label: 'En cours', cls: 'tag-warn' },
-    }[outcome];
+    }[h.outcome];
 
-    const dirLabel = h.signal === 'bull' ? '▲ Long' : '▼ Short';
-    const dirColor = h.signal === 'bull' ? 'var(--bull)' : 'var(--bear)';
+    const dirLabel = h.direction === 'long' ? '▲ Long' : '▼ Short';
+    const dirColor = h.direction === 'long' ? 'var(--bull)' : 'var(--bear)';
+
+    const outcomeButtons = `
+      <div style="display:flex; gap:4px; margin-top:4px;">
+        <button class="outcome-btn" data-id="${h.id}" data-outcome="win" title="Marquer gagné" style="border-color:var(--bull); color:var(--bull);">✓</button>
+        <button class="outcome-btn" data-id="${h.id}" data-outcome="loss" title="Marquer perdu" style="border-color:var(--bear); color:var(--bear);">✗</button>
+        <button class="outcome-btn" data-id="${h.id}" data-outcome="breakeven" title="Marquer neutre" style="border-color:var(--warn); color:var(--warn);">=</button>
+        <button class="outcome-btn" data-id="${h.id}" data-delete="1" title="Supprimer" style="border-color:var(--text-dim); color:var(--text-dim);">🗑</button>
+      </div>`;
 
     return `
       <tr>
@@ -899,7 +888,11 @@ function renderHistoryPage() {
         <td>${h.entry.toFixed(2)}</td>
         <td style="color:var(--bear)">${h.stop.toFixed(2)}</td>
         <td style="color:var(--bull)">${h.target.toFixed(2)}</td>
-        <td><span class="indicator-tag ${outcomeMeta.cls}">${outcomeMeta.label}</span></td>
+        <td>${h.positionValue != null ? h.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 }) + '$' : '—'}</td>
+        <td>
+          <span class="indicator-tag ${outcomeMeta.cls}">${outcomeMeta.label}</span>
+          ${outcomeButtons}
+        </td>
       </tr>
     `;
   }).join('');
@@ -907,30 +900,30 @@ function renderHistoryPage() {
   els.content.innerHTML = `
     ${renderBackToScanIfNeeded()}
     <div class="ticker-header">
-      <div class="ticker-id" style="font-size:20px;">Historique des signaux</div>
+      <div class="ticker-id" style="font-size:20px;">Journal de suivi</div>
     </div>
 
     <div class="signal-banner signal-neutral" style="margin-bottom:20px;">
-      <span>${history.length} signal${history.length > 1 ? 's' : ''} enregistré${history.length > 1 ? 's' : ''}</span>
-      <span class="signal-detail">${wins} gagnant${wins > 1 ? 's' : ''} · ${losses} perdant${losses > 1 ? 's' : ''} · ${pending} en cours${resolved > 0 ? ` · winrate résolu: ${winrate}%` : ''}</span>
+      <span>${history.length} trade${history.length > 1 ? 's' : ''} enregistré${history.length > 1 ? 's' : ''}</span>
+      <span class="signal-detail">${wins} gagné${wins > 1 ? 's' : ''} · ${losses} perdu${losses > 1 ? 's' : ''} · ${breakeven} neutre${breakeven > 1 ? 's' : ''} · ${pending} en cours${resolved > 0 ? ` · winrate: ${winrate}%` : ''}</span>
     </div>
 
     <table class="scan-table">
       <thead>
         <tr>
-          <th>Ticker</th><th>Date</th><th>Direction</th><th>Entrée</th><th>Stop</th><th>Target</th><th>Résultat</th>
+          <th>Ticker</th><th>Date</th><th>Direction</th><th>Entrée</th><th>Stop</th><th>Target</th><th>Montant</th><th>Résultat</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
     </table>
 
     <div style="margin-top:16px;">
-      <button class="back-to-scan" id="clear-history-btn">Effacer l'historique</button>
+      <button class="back-to-scan" id="clear-history-btn">Effacer tout le journal</button>
     </div>
   `;
 
   document.getElementById('clear-history-btn')?.addEventListener('click', () => {
-    if (confirm('Effacer tout l\'historique des signaux ? Cette action est irréversible.')) {
+    if (confirm('Effacer tout le journal de suivi ? Cette action est irréversible.')) {
       saveHistory([]);
       renderHistoryPage();
     }
@@ -938,38 +931,16 @@ function renderHistoryPage() {
 
   document.getElementById('back-to-scan-btn-hist')?.addEventListener('click', runScanAll);
 
-  // Best-effort : tente de résoudre le statut (win/loss/pending) des entrées récentes
-  // en re-fetchant les tickers concernés, sans bloquer l'affichage initial.
-  resolveHistoryOutcomes(history);
-}
-
-async function resolveHistoryOutcomes(history) {
-  const tickers = [...new Set(history.filter(h => !h._outcome || h._outcome === 'pending').map(h => h.ticker))];
-  if (tickers.length === 0) return;
-
-  let changed = false;
-  for (const ticker of tickers) {
-    try {
-      const raw = await fetchYahooData(ticker);
-      const freshData = parseYahooResponse(raw);
-      history.forEach(h => {
-        if (h.ticker === ticker) {
-          const outcome = evaluateHistoryOutcome(h, freshData);
-          if (outcome !== 'pending' && h._outcome !== outcome) {
-            h._outcome = outcome;
-            changed = true;
-          }
-        }
-      });
-    } catch {
-      // ticker injoignable pour l'instant — on laisse en pending, pas bloquant
-    }
-  }
-
-  if (changed) {
-    saveHistory(history);
-    renderHistoryPage(); // ré-affiche avec les statuts à jour
-  }
+  els.content.querySelectorAll('.outcome-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (btn.dataset.delete) {
+        deleteTradeFromHistory(btn.dataset.id);
+      } else {
+        updateTradeOutcome(btn.dataset.id, btn.dataset.outcome);
+      }
+      renderHistoryPage();
+    });
+  });
 }
 
 function renderBackToScanIfNeeded() {
@@ -1111,7 +1082,7 @@ function renderResults(ticker, data, a, orbMinutes) {
     </div>
 
     ${renderSetupScore(a)}
-    ${renderTradeLevels(a)}
+    ${renderTradeLevels(a, ticker, orbMinutes)}
   `;
 
   renderChart(data, a);
@@ -1121,6 +1092,23 @@ function renderResults(ticker, data, a, orbMinutes) {
     // Ré-affiche le dernier scan sans refaire les requêtes réseau si possible :
     // on relance simplement un scan complet (plus simple et toujours à jour).
     runScanAll();
+  });
+
+  els.content.querySelectorAll('.add-to-history-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      addTradeToHistory({
+        ticker: btn.dataset.ticker,
+        direction: btn.dataset.direction,
+        entry: parseFloat(btn.dataset.entry),
+        stop: parseFloat(btn.dataset.stop),
+        target: parseFloat(btn.dataset.target),
+        positionValue: btn.dataset.position ? parseFloat(btn.dataset.position) : null,
+        shares: btn.dataset.shares ? parseFloat(btn.dataset.shares) : null,
+        orbMinutes: parseInt(btn.dataset.orb, 10),
+      });
+      btn.textContent = '✓ Ajouté au suivi';
+      btn.disabled = true;
+    });
   });
 }
 
@@ -1163,7 +1151,7 @@ function renderSetupScore(a) {
   `;
 }
 
-function renderTradeLevels(a) {
+function renderTradeLevels(a, ticker, orbMinutes) {
   const { long, short } = a.tradeLevels;
   const isLongActive = a.signal === 'bull';
   const isShortActive = a.signal === 'bear';
@@ -1196,6 +1184,7 @@ function renderTradeLevels(a) {
         <div class="trade-row"><span class="trade-row-label">Risque / Reward</span><span class="trade-row-value">${riskLong.toFixed(2)} / ${rewardLong.toFixed(2)}</span></div>
         ${renderSizingRow(sizingLong)}
         <div class="trade-card-note">${long.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
+        <button class="add-to-history-btn" data-direction="long" data-ticker="${ticker}" data-orb="${orbMinutes}" data-entry="${long.entry}" data-stop="${long.stop}" data-target="${long.target}" data-position="${sizingLong ? sizingLong.positionValue : ''}" data-shares="${sizingLong ? sizingLong.shares : ''}">+ Ajouter au suivi</button>
       </div>
 
       <div class="trade-card ${isShortActive ? 'active-short' : ''}">
@@ -1209,6 +1198,7 @@ function renderTradeLevels(a) {
         <div class="trade-row"><span class="trade-row-label">Risque / Reward</span><span class="trade-row-value">${riskShort.toFixed(2)} / ${rewardShort.toFixed(2)}</span></div>
         ${renderSizingRow(sizingShort)}
         <div class="trade-card-note">${short.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
+        <button class="add-to-history-btn" data-direction="short" data-ticker="${ticker}" data-orb="${orbMinutes}" data-entry="${short.entry}" data-stop="${short.stop}" data-target="${short.target}" data-position="${sizingShort ? sizingShort.positionValue : ''}" data-shares="${sizingShort ? sizingShort.shares : ''}">+ Ajouter au suivi</button>
       </div>
     </div>
   `;
