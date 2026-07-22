@@ -132,6 +132,7 @@ renderWatchlistBar(); // rendu initial au chargement de la page
 
 els.btn.addEventListener('click', runAnalysis);
 els.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') runAnalysis(); });
+document.getElementById('history-btn').addEventListener('click', renderHistoryPage);
 
 // Récupère + calcule tout pour un ticker, sans toucher au DOM — réutilisable
 // pour la vue détaillée (runAnalysis) et le scan groupé (runScanAll).
@@ -142,6 +143,11 @@ async function analyzeTicker(ticker, orbMinutes) {
     throw new Error('Pas assez de données intraday (marché fermé ou ticker invalide)');
   }
   const analysis = computeIndicators(parsed, orbMinutes);
+
+  if (analysis.signal === 'bull' || analysis.signal === 'bear') {
+    recordSignalToHistory(ticker, analysis, orbMinutes);
+  }
+
   return { parsed, analysis };
 }
 
@@ -400,13 +406,236 @@ function computeIndicators(data, orbMinutes) {
     reasons.push('prix encore dans le range d\'ouverture, pas de breakout');
   }
 
+  // --- Niveaux de trade (long / short) ---
+  // Règle : stop à l'opposé du range ORB (niveau structurel — c'est justement le niveau
+  // que le prix vient de casser), mais plafonné à 1.5x ATR pour éviter un risque démesuré
+  // les jours où le range ORB est anormalement large. Target en ratio 2:1 (rapport
+  // risque/reward le plus robuste empiriquement pour ce type de stratégie).
+  const RR_RATIO = 2;
+  const MAX_STOP_ATR_MULT = 1.5;
+  const orbRange = orbHigh - orbLow;
+  const maxStopDistance = atr * MAX_STOP_ATR_MULT;
+
+  // LONG : entrée à l'ORB High (niveau de breakout), stop sous l'ORB Low
+  const longEntry = orbHigh;
+  const longStopDistance = Math.min(orbRange, maxStopDistance);
+  const longStop = longEntry - longStopDistance;
+  const longTarget = longEntry + longStopDistance * RR_RATIO;
+  const longStopCapped = longStopDistance < orbRange; // true si l'ATR a limité le stop
+
+  // SHORT : entrée à l'ORB Low, stop au-dessus de l'ORB High
+  const shortEntry = orbLow;
+  const shortStopDistance = Math.min(orbRange, maxStopDistance);
+  const shortStop = shortEntry + shortStopDistance;
+  const shortTarget = shortEntry - shortStopDistance * RR_RATIO;
+  const shortStopCapped = shortStopDistance < orbRange;
+
+  const tradeLevels = {
+    long: { entry: longEntry, stop: longStop, target: longTarget, stopCapped: longStopCapped, rr: RR_RATIO },
+    short: { entry: shortEntry, stop: shortStop, target: shortTarget, stopCapped: shortStopCapped, rr: RR_RATIO },
+  };
+
   return {
     orbHigh, orbLow, orbVolume, candlesPerOrb,
     lastClose, prevClose, currentVwap, vwapSeries,
     atr, adx, relativeVolume,
     signal, reasons,
     lastDayIdx,
+    tradeLevels,
   };
+}
+
+// ------------------------------------------------------------
+// HISTORIQUE DES SIGNAUX — persistant, pour comparer jour après jour
+// ------------------------------------------------------------
+const HISTORY_KEY = 'orb-scanner-history';
+const HISTORY_MAX_ENTRIES = 500; // évite une croissance illimitée du localStorage
+
+function loadHistory() {
+  try {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveHistory(history) {
+  try {
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  } catch {
+    // quota dépassé ou navigation privée — on continue sans persister
+  }
+}
+
+// Une entrée = un signal confirmé pour un ticker un jour donné.
+// Clé de dédoublonnage : ticker + jour + direction du signal (pas d'entrée en double
+// si tu rescans le même ticker plusieurs fois dans la même séance).
+function recordSignalToHistory(ticker, analysis, orbMinutes) {
+  const history = loadHistory();
+  const today = new Date().toISOString().slice(0, 10);
+  const dedupeKey = `${ticker}|${today}|${analysis.signal}`;
+
+  if (history.some(h => h.dedupeKey === dedupeKey)) return; // déjà enregistré aujourd'hui
+
+  const levels = analysis.signal === 'bull' ? analysis.tradeLevels.long : analysis.tradeLevels.short;
+
+  history.unshift({
+    dedupeKey,
+    ticker,
+    date: today,
+    timestamp: Date.now(),
+    signal: analysis.signal,
+    orbMinutes,
+    entry: levels.entry,
+    stop: levels.stop,
+    target: levels.target,
+    priceAtSignal: analysis.lastClose,
+    adx: analysis.adx,
+    relativeVolume: analysis.relativeVolume,
+  });
+
+  saveHistory(history.slice(0, HISTORY_MAX_ENTRIES));
+}
+
+// Détermine si un trade historique a depuis touché son TP ou son SL,
+// en se basant sur les données intraday les plus récentes déjà chargées pour ce ticker.
+// Best-effort : si on n'a pas re-fetché ce ticker depuis, le statut reste "en cours".
+function evaluateHistoryOutcome(entry, freshData) {
+  if (!freshData) return 'pending';
+
+  const isLong = entry.signal === 'bull';
+  // on ne regarde que les bougies postérieures au moment du signal
+  const relevantIdx = freshData.timestamps
+    .map((t, i) => ({ t, i }))
+    .filter(({ t }) => t * 1000 >= entry.timestamp);
+
+  for (const { i } of relevantIdx) {
+    if (isLong) {
+      if (freshData.lows[i] <= entry.stop) return 'loss';
+      if (freshData.highs[i] >= entry.target) return 'win';
+    } else {
+      if (freshData.highs[i] >= entry.stop) return 'loss';
+      if (freshData.lows[i] <= entry.target) return 'win';
+    }
+  }
+  return 'pending';
+}
+
+function renderHistoryPage() {
+  const history = loadHistory();
+
+  if (history.length === 0) {
+    els.content.innerHTML = `
+      ${renderBackToScanIfNeeded()}
+      <div class="empty-state">
+        <div class="glyph">◷</div>
+        <p>Aucun signal confirmé enregistré pour l'instant. Dès qu'un breakout haussier ou baissier valide apparaît sur un ticker analysé, il est ajouté ici automatiquement.</p>
+      </div>
+    `;
+    return;
+  }
+
+  const wins = history.filter(h => h._outcome === 'win').length;
+  const losses = history.filter(h => h._outcome === 'loss').length;
+  const pending = history.filter(h => !h._outcome || h._outcome === 'pending').length;
+  const resolved = wins + losses;
+  const winrate = resolved > 0 ? ((wins / resolved) * 100).toFixed(0) : '—';
+
+  const rows = history.map(h => {
+    const outcome = h._outcome || 'pending';
+    const outcomeMeta = {
+      win: { label: 'TP touché', cls: 'tag-good' },
+      loss: { label: 'SL touché', cls: 'tag-bad' },
+      pending: { label: 'En cours', cls: 'tag-warn' },
+    }[outcome];
+
+    const dirLabel = h.signal === 'bull' ? '▲ Long' : '▼ Short';
+    const dirColor = h.signal === 'bull' ? 'var(--bull)' : 'var(--bear)';
+
+    return `
+      <tr>
+        <td class="scan-ticker">${h.ticker}</td>
+        <td style="font-family:var(--sans); font-size:12px; color:var(--text-dim)">${h.date}</td>
+        <td style="color:${dirColor}; font-weight:600;">${dirLabel}</td>
+        <td>${h.entry.toFixed(2)}</td>
+        <td style="color:var(--bear)">${h.stop.toFixed(2)}</td>
+        <td style="color:var(--bull)">${h.target.toFixed(2)}</td>
+        <td><span class="indicator-tag ${outcomeMeta.cls}">${outcomeMeta.label}</span></td>
+      </tr>
+    `;
+  }).join('');
+
+  els.content.innerHTML = `
+    ${renderBackToScanIfNeeded()}
+    <div class="ticker-header">
+      <div class="ticker-id" style="font-size:20px;">Historique des signaux</div>
+    </div>
+
+    <div class="signal-banner signal-neutral" style="margin-bottom:20px;">
+      <span>${history.length} signal${history.length > 1 ? 's' : ''} enregistré${history.length > 1 ? 's' : ''}</span>
+      <span class="signal-detail">${wins} gagnant${wins > 1 ? 's' : ''} · ${losses} perdant${losses > 1 ? 's' : ''} · ${pending} en cours${resolved > 0 ? ` · winrate résolu: ${winrate}%` : ''}</span>
+    </div>
+
+    <table class="scan-table">
+      <thead>
+        <tr>
+          <th>Ticker</th><th>Date</th><th>Direction</th><th>Entrée</th><th>Stop</th><th>Target</th><th>Résultat</th>
+        </tr>
+      </thead>
+      <tbody>${rows}</tbody>
+    </table>
+
+    <div style="margin-top:16px;">
+      <button class="back-to-scan" id="clear-history-btn">Effacer l'historique</button>
+    </div>
+  `;
+
+  document.getElementById('clear-history-btn')?.addEventListener('click', () => {
+    if (confirm('Effacer tout l\'historique des signaux ? Cette action est irréversible.')) {
+      saveHistory([]);
+      renderHistoryPage();
+    }
+  });
+
+  document.getElementById('back-to-scan-btn-hist')?.addEventListener('click', runScanAll);
+
+  // Best-effort : tente de résoudre le statut (win/loss/pending) des entrées récentes
+  // en re-fetchant les tickers concernés, sans bloquer l'affichage initial.
+  resolveHistoryOutcomes(history);
+}
+
+async function resolveHistoryOutcomes(history) {
+  const tickers = [...new Set(history.filter(h => !h._outcome || h._outcome === 'pending').map(h => h.ticker))];
+  if (tickers.length === 0) return;
+
+  let changed = false;
+  for (const ticker of tickers) {
+    try {
+      const raw = await fetchYahooData(ticker);
+      const freshData = parseYahooResponse(raw);
+      history.forEach(h => {
+        if (h.ticker === ticker) {
+          const outcome = evaluateHistoryOutcome(h, freshData);
+          if (outcome !== 'pending' && h._outcome !== outcome) {
+            h._outcome = outcome;
+            changed = true;
+          }
+        }
+      });
+    } catch {
+      // ticker injoignable pour l'instant — on laisse en pending, pas bloquant
+    }
+  }
+
+  if (changed) {
+    saveHistory(history);
+    renderHistoryPage(); // ré-affiche avec les statuts à jour
+  }
+}
+
+function renderBackToScanIfNeeded() {
+  return watchlist.length > 0 ? `<button class="back-to-scan" id="back-to-scan-btn-hist">← Retour au scan (${watchlist.length} tickers)</button>` : '';
 }
 
 function groupByTradingDay(timestamps) {
@@ -542,6 +771,8 @@ function renderResults(ticker, data, a, orbMinutes) {
         ${renderIndicatorCard('Volume relatif', `${a.relativeVolume.toFixed(2)}x`, '', a.relativeVolume > 1.2 ? 'Volume élevé — signal fiable' : 'Volume faible — risque de fakeout', a.relativeVolume > 1.2 ? 'good' : 'bad')}
       </div>
     </div>
+
+    ${renderTradeLevels(a)}
   `;
 
   renderChart(data, a);
@@ -552,6 +783,45 @@ function renderResults(ticker, data, a, orbMinutes) {
     // on relance simplement un scan complet (plus simple et toujours à jour).
     runScanAll();
   });
+}
+
+function renderTradeLevels(a) {
+  const { long, short } = a.tradeLevels;
+  const isLongActive = a.signal === 'bull';
+  const isShortActive = a.signal === 'bear';
+
+  const riskLong = long.entry - long.stop;
+  const rewardLong = long.target - long.entry;
+  const riskShort = short.stop - short.entry;
+  const rewardShort = short.entry - short.target;
+
+  return `
+    <div class="trade-levels">
+      <div class="trade-card ${isLongActive ? 'active-long' : ''}">
+        <div class="trade-card-header">
+          <span class="trade-card-title long-title">▲ Long</span>
+          ${isLongActive ? '<span class="trade-active-badge">SIGNAL ACTIF</span>' : ''}
+        </div>
+        <div class="trade-row"><span class="trade-row-label">Entrée (ORB High)</span><span class="trade-row-value">${long.entry.toFixed(2)}</span></div>
+        <div class="trade-row"><span class="trade-row-label">Stop-loss</span><span class="trade-row-value" style="color:var(--bear)">${long.stop.toFixed(2)}</span></div>
+        <div class="trade-row"><span class="trade-row-label">Take-profit (${long.rr}:1)</span><span class="trade-row-value" style="color:var(--bull)">${long.target.toFixed(2)}</span></div>
+        <div class="trade-row"><span class="trade-row-label">Risque / Reward</span><span class="trade-row-value">${riskLong.toFixed(2)} / ${rewardLong.toFixed(2)}</span></div>
+        <div class="trade-card-note">${long.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
+      </div>
+
+      <div class="trade-card ${isShortActive ? 'active-short' : ''}">
+        <div class="trade-card-header">
+          <span class="trade-card-title short-title">▼ Short</span>
+          ${isShortActive ? '<span class="trade-active-badge">SIGNAL ACTIF</span>' : ''}
+        </div>
+        <div class="trade-row"><span class="trade-row-label">Entrée (ORB Low)</span><span class="trade-row-value">${short.entry.toFixed(2)}</span></div>
+        <div class="trade-row"><span class="trade-row-label">Stop-loss</span><span class="trade-row-value" style="color:var(--bear)">${short.stop.toFixed(2)}</span></div>
+        <div class="trade-row"><span class="trade-row-label">Take-profit (${short.rr}:1)</span><span class="trade-row-value" style="color:var(--bull)">${short.target.toFixed(2)}</span></div>
+        <div class="trade-row"><span class="trade-row-label">Risque / Reward</span><span class="trade-row-value">${riskShort.toFixed(2)} / ${rewardShort.toFixed(2)}</span></div>
+        <div class="trade-card-note">${short.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
+      </div>
+    </div>
+  `;
 }
 
 function renderIndicatorCard(label, value, unit, subtext, tagType) {
