@@ -604,6 +604,41 @@
     line-height: 1.5;
   }
 
+  .add-to-history-btn {
+    width: 100%;
+    margin-top: 14px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--vwap);
+    color: var(--vwap);
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 12px;
+    padding: 9px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+  }
+
+  .add-to-history-btn:hover { background: var(--vwap); color: var(--bg); }
+  .add-to-history-btn:disabled { opacity: 0.6; cursor: default; background: var(--bg-panel-raised); color: var(--text-dim); border-color: var(--border); }
+
+  .outcome-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 700;
+    width: 24px;
+    height: 24px;
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  .outcome-btn:hover { background: var(--bg-panel-raised); }
+
   .indicator-card {
     background: var(--bg-panel);
     border: 1px solid var(--border);
