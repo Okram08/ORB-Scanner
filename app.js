@@ -879,13 +879,42 @@ function addTradeToHistory({ ticker, direction, entry, stop, target, positionVal
   saveHistory(history.slice(0, HISTORY_MAX_ENTRIES));
 }
 
-function updateTradeOutcome(id, outcome) {
+// Calcule le PnL en $ d'un trade selon son résultat :
+// - win  : on suppose le take-profit touché intégralement
+// - loss : on suppose le stop-loss touché intégralement
+// - breakeven (clôture manuelle) : utilise le prix de sortie réellement fourni
+function computeTradePnl(trade, outcome, exitPrice) {
+  if (trade.shares == null) return null; // pas de taille de position connue, PnL non calculable
+
+  const isLong = trade.direction === 'long';
+  let exit;
+  if (outcome === 'win') exit = trade.target;
+  else if (outcome === 'loss') exit = trade.stop;
+  else exit = exitPrice; // breakeven / clôture manuelle : prix fourni par l'utilisateur
+
+  if (exit == null || isNaN(exit)) return null;
+
+  const pnl = isLong ? (exit - trade.entry) * trade.shares : (trade.entry - exit) * trade.shares;
+  return { pnl, exit };
+}
+
+function updateTradeOutcome(id, outcome, exitPrice) {
   const history = loadHistory();
   const trade = history.find(h => h.id === id);
-  if (trade) {
-    trade.outcome = outcome;
-    saveHistory(history);
+  if (!trade) return;
+
+  trade.outcome = outcome;
+
+  const result = computeTradePnl(trade, outcome, exitPrice);
+  if (result) {
+    trade.pnl = result.pnl;
+    trade.exitPrice = result.exit;
+  } else {
+    trade.pnl = null;
+    trade.exitPrice = null;
   }
+
+  saveHistory(history);
 }
 
 function deleteTradeFromHistory(id) {
@@ -914,6 +943,12 @@ function renderHistoryPage() {
   const resolved = wins + losses;
   const winrate = resolved > 0 ? ((wins / resolved) * 100).toFixed(0) : '—';
 
+  // PnL global — somme des trades dont le PnL a pu être calculé (nécessite un montant
+  // de position connu, donc balance renseignée au moment de l'ajout au suivi).
+  const tradesWithPnl = history.filter(h => h.pnl != null);
+  const totalPnl = tradesWithPnl.reduce((sum, h) => sum + h.pnl, 0);
+  const pnlColor = totalPnl > 0 ? 'var(--bull)' : totalPnl < 0 ? 'var(--bear)' : 'var(--text-dim)';
+
   // Résumé winrate par grade — utile pour vérifier si les meilleurs scores
   // performent effectivement mieux sur la durée, une fois assez de trades enregistrés.
   const grades = ['S', 'A', 'B', 'C', 'D', 'E'];
@@ -929,7 +964,7 @@ function renderHistoryPage() {
     const outcomeMeta = {
       win: { label: 'Gagné', cls: 'tag-good' },
       loss: { label: 'Perdu', cls: 'tag-bad' },
-      breakeven: { label: 'Neutre', cls: 'tag-warn' },
+      breakeven: { label: 'Clôturé manuel', cls: 'tag-warn' },
       pending: { label: 'En cours', cls: 'tag-warn' },
     }[h.outcome];
 
@@ -940,12 +975,15 @@ function renderHistoryPage() {
       <div style="display:flex; gap:4px; margin-top:4px;">
         <button class="outcome-btn" data-id="${h.id}" data-outcome="win" title="Marquer gagné" style="border-color:var(--bull); color:var(--bull);">✓</button>
         <button class="outcome-btn" data-id="${h.id}" data-outcome="loss" title="Marquer perdu" style="border-color:var(--bear); color:var(--bear);">✗</button>
-        <button class="outcome-btn" data-id="${h.id}" data-outcome="breakeven" title="Marquer neutre" style="border-color:var(--warn); color:var(--warn);">=</button>
+        <button class="outcome-btn" data-id="${h.id}" data-outcome="breakeven" title="Clôturé manuellement (demande le prix de sortie)" style="border-color:var(--warn); color:var(--warn);">=</button>
         <button class="outcome-btn" data-id="${h.id}" data-delete="1" title="Supprimer" style="border-color:var(--text-dim); color:var(--text-dim);">🗑</button>
       </div>`;
 
     const gradeColors = { S: 'var(--bull)', A: 'var(--bull)', B: 'var(--warn)', C: 'var(--warn)', D: 'var(--bear)', E: 'var(--bear)' };
     const gradeCell = h.grade ? `<span style="font-weight:700; color:${gradeColors[h.grade] || 'var(--text-dim)'}; font-family:var(--mono);">${h.grade}</span>` : '<span style="color:var(--text-dim);">—</span>';
+    const pnlCell = h.pnl != null
+      ? `<span style="color:${h.pnl >= 0 ? 'var(--bull)' : 'var(--bear)'}; font-weight:700;">${h.pnl >= 0 ? '+' : ''}${h.pnl.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$</span>`
+      : '<span style="color:var(--text-dim);">—</span>';
 
     return `
       <tr>
@@ -957,6 +995,7 @@ function renderHistoryPage() {
         <td style="color:var(--bear)">${h.stop.toFixed(2)}</td>
         <td style="color:var(--bull)">${h.target.toFixed(2)}</td>
         <td>${h.positionValue != null ? h.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 }) + '$' : '—'}</td>
+        <td>${pnlCell}</td>
         <td>
           <span class="indicator-tag ${outcomeMeta.cls}">${outcomeMeta.label}</span>
           ${outcomeButtons}
@@ -969,11 +1008,13 @@ function renderHistoryPage() {
     ${renderBackToScanIfNeeded()}
     <div class="ticker-header">
       <div class="ticker-id" style="font-size:20px;">Journal de suivi</div>
+      ${tradesWithPnl.length > 0 ? `<div class="ticker-price" style="color:${pnlColor}; font-size:22px;">${totalPnl >= 0 ? '+' : ''}${totalPnl.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$</div>` : ''}
     </div>
+    ${tradesWithPnl.length < history.filter(h => h.outcome !== 'pending').length ? `<div style="font-size:11px; color:var(--text-dim); font-family:var(--sans); margin-bottom:12px;">PnL calculé sur ${tradesWithPnl.length} trade${tradesWithPnl.length > 1 ? 's' : ''} résolu${tradesWithPnl.length > 1 ? 's' : ''} avec montant connu — les trades sans balance renseignée au moment de l'ajout ne comptent pas dans ce total</div>` : ''}
 
     <div class="signal-banner signal-neutral" style="margin-bottom:20px;">
       <span>${history.length} trade${history.length > 1 ? 's' : ''} enregistré${history.length > 1 ? 's' : ''}</span>
-      <span class="signal-detail">${wins} gagné${wins > 1 ? 's' : ''} · ${losses} perdu${losses > 1 ? 's' : ''} · ${breakeven} neutre${breakeven > 1 ? 's' : ''} · ${pending} en cours${resolved > 0 ? ` · winrate: ${winrate}%` : ''}</span>
+      <span class="signal-detail">${wins} gagné${wins > 1 ? 's' : ''} · ${losses} perdu${losses > 1 ? 's' : ''} · ${breakeven} clôturé${breakeven > 1 ? 's' : ''} manuellement · ${pending} en cours${resolved > 0 ? ` · winrate: ${winrate}%` : ''}</span>
     </div>
 
     ${gradeStatsHtml ? `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:16px;">Winrate par grade : ${gradeStatsHtml}</div>` : ''}
@@ -981,7 +1022,7 @@ function renderHistoryPage() {
     <table class="scan-table">
       <thead>
         <tr>
-          <th>Ticker</th><th>Date</th><th>Direction</th><th>Grade</th><th>Entrée</th><th>Stop</th><th>Target</th><th>Montant</th><th>Résultat</th>
+          <th>Ticker</th><th>Date</th><th>Direction</th><th>Grade</th><th>Entrée</th><th>Stop</th><th>Target</th><th>Montant</th><th>PnL</th><th>Résultat</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -1005,6 +1046,12 @@ function renderHistoryPage() {
     btn.addEventListener('click', () => {
       if (btn.dataset.delete) {
         deleteTradeFromHistory(btn.dataset.id);
+      } else if (btn.dataset.outcome === 'breakeven') {
+        const input = prompt('À quel prix as-tu clôturé ce trade ? (ni TP ni SL touché — clôture manuelle)');
+        if (input === null) return; // annulé
+        const exitPrice = parseFloat(input.replace(',', '.'));
+        if (isNaN(exitPrice) || exitPrice <= 0) { alert('Prix invalide.'); return; }
+        updateTradeOutcome(btn.dataset.id, 'breakeven', exitPrice);
       } else {
         updateTradeOutcome(btn.dataset.id, btn.dataset.outcome);
       }
