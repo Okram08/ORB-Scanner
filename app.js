@@ -193,11 +193,28 @@ function computePositionSize(entry, stop) {
   const riskAmount = userBalance * (riskPct / 100);
   const stopDistance = Math.abs(entry - stop);
   if (stopDistance <= 0) return null;
+
   // Pas d'arrondi entier : beaucoup de brokers (Trading212, DEGIRO, etc.) permettent
   // les actions fractionnées, donc le montant exact est plus utile qu'un nombre d'actions arrondi.
-  const shares = riskAmount / stopDistance;
-  const positionValue = shares * entry; // montant total à engager sur l'ordre
-  return { shares, riskAmount, stopDistance, positionValue };
+  let shares = riskAmount / stopDistance;
+  let positionValue = shares * entry;
+
+  // Plafond obligatoire : le montant à investir ne peut jamais dépasser la balance
+  // disponible. Si le calcul de risque pur (% balance ÷ distance du stop) donne un
+  // montant supérieur à la balance — ce qui arrive quand le stop est très proche de
+  // l'entrée par rapport au prix du titre — on plafonne à la balance totale et on
+  // signale que le risque réel réellement engagé dépasse alors le % visé.
+  const balanceCapped = positionValue > userBalance;
+  if (balanceCapped) {
+    positionValue = userBalance;
+    shares = positionValue / entry;
+  }
+
+  // Risque réellement engagé une fois le plafond appliqué (peut dépasser le % visé
+  // si balanceCapped est vrai — c'est justement ce qu'on veut signaler à l'utilisateur).
+  const actualRiskAmount = shares * stopDistance;
+
+  return { shares, riskAmount: actualRiskAmount, targetRiskAmount: riskAmount, stopDistance, positionValue, balanceCapped };
 }
 
 let chart = null;
@@ -1202,6 +1219,13 @@ function renderTradeLevels(a, ticker, orbMinutes) {
   const renderSizingRow = (sizing) => {
     if (!sizing) {
       return `<div class="position-size-row"><span class="label">Montant à investir</span><span class="value" style="color:var(--text-dim); font-weight:400;">renseigne ta balance ci-dessus</span></div>`;
+    }
+    if (sizing.balanceCapped) {
+      const actualRiskPct = (sizing.riskAmount / userBalance) * 100;
+      return `<div class="position-size-row" style="flex-direction:column; align-items:stretch; gap:4px;">
+        <div style="display:flex; justify-content:space-between;"><span class="label">Montant à investir</span><span class="value">${sizing.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$ <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(= toute ta balance)</span></span></div>
+        <div style="font-size:11px; color:var(--warn); font-family:var(--sans);">⚠ Stop trop proche pour respecter ${riskPct}% avec cette balance — risque réel ~${actualRiskPct.toFixed(1)}% (${sizing.riskAmount.toFixed(2)}$) si tout le capital est engagé</div>
+      </div>`;
     }
     return `<div class="position-size-row"><span class="label">Montant à investir (${riskPct}% risqué)</span><span class="value">${sizing.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$ <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(${sizing.shares.toFixed(3)} actions · ~${sizing.riskAmount.toFixed(2)}$ risqués si SL touché)</span></span></div>`;
   };
