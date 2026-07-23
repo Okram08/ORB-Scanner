@@ -788,10 +788,45 @@ const HISTORY_MAX_ENTRIES = 500; // évite une croissance illimitée du localSto
 function loadHistory() {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
-    return raw ? JSON.parse(raw) : [];
+    const parsed = raw ? JSON.parse(raw) : [];
+    return parsed.map(migrateHistoryEntry).filter(Boolean);
   } catch {
     return [];
   }
+}
+
+// Convertit une entrée de l'ancien format automatique (dedupeKey/signal/_outcome,
+// créé par la version précédente du site qui enregistrait les breakouts tout seule)
+// vers le nouveau format manuel (id/direction/outcome). Les entrées déjà au bon
+// format passent inchangées. Une entrée illisible est écartée plutôt que de planter
+// tout l'affichage du journal.
+function migrateHistoryEntry(h) {
+  if (!h || typeof h !== 'object') return null;
+
+  // Déjà au nouveau format
+  if (h.id && h.direction && h.outcome) return h;
+
+  // Ancien format automatique : signal ('bull'/'bear') + _outcome ('win'/'loss'/'pending')
+  const direction = h.direction || (h.signal === 'bull' ? 'long' : h.signal === 'bear' ? 'short' : null);
+  if (!direction || typeof h.entry !== 'number' || typeof h.stop !== 'number' || typeof h.target !== 'number') {
+    return null; // entrée trop incomplète pour être récupérée proprement
+  }
+
+  const outcomeMap = { win: 'win', loss: 'loss', pending: 'pending', breakeven: 'breakeven' };
+  const outcome = outcomeMap[h.outcome] || outcomeMap[h._outcome] || 'pending';
+
+  return {
+    id: h.id || h.dedupeKey || `${h.ticker || 'UNKNOWN'}-${h.timestamp || Date.now()}`,
+    ticker: h.ticker || '?',
+    date: h.date || new Date().toISOString().slice(0, 10),
+    timestamp: h.timestamp || Date.now(),
+    direction,
+    orbMinutes: h.orbMinutes || 15,
+    entry: h.entry, stop: h.stop, target: h.target,
+    positionValue: h.positionValue ?? null,
+    shares: h.shares ?? null,
+    outcome,
+  };
 }
 
 function saveHistory(history) {
