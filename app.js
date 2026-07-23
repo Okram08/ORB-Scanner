@@ -688,8 +688,20 @@ function computeIndicators(data, orbMinutes) {
   const orbHigh = Math.max(...orbIdx.map(i => highs[i]));
   const orbLow = Math.min(...orbIdx.map(i => lows[i]));
 
-  const lastIdx = lastDayIdx[lastDayIdx.length - 1];
-  const lastClose = closes[lastIdx];
+  // La toute dernière bougie de la liste est souvent encore EN FORMATION (Yahoo la
+  // renvoie avec des valeurs qui bougent en continu tant que les 5 minutes ne sont
+  // pas écoulées) — comparer un prix qui n'a pas fini de bouger à un niveau fixe rend
+  // le signal instable d'une seconde à l'autre sans aucun fondement réel. On distingue
+  // donc : lastIdx (dernière bougie CLOSE, sert au calcul du signal/score — stable) et
+  // liveIdx (bougie la plus récente, sert uniquement à l'affichage du prix "live").
+  const CANDLE_INTERVAL_SEC = 5 * 60;
+  const nowSec = Date.now() / 1000;
+  const liveIdx = lastDayIdx[lastDayIdx.length - 1];
+  const isLiveCandleOpen = (nowSec - timestamps[liveIdx]) < CANDLE_INTERVAL_SEC;
+  const lastIdx = (isLiveCandleOpen && lastDayIdx.length > 1) ? lastDayIdx[lastDayIdx.length - 2] : liveIdx;
+
+  const lastClose = closes[lastIdx];       // référence pour signal/score — stable, bougie close
+  const livePrice = closes[liveIdx];        // prix affiché à l'utilisateur — bouge en continu
   const prevClose = closes[lastDayIdx[0]] ?? closes[0];
 
   // --- VWAP (calculé sur la session du jour uniquement) ---
@@ -789,6 +801,7 @@ function computeIndicators(data, orbMinutes) {
   return {
     orbHigh, orbLow, orbVolume, candlesPerOrb,
     lastClose, prevClose, currentVwap, vwapSeries,
+    livePrice, isLiveCandleOpen,
     atr, adx, relativeVolume,
     signal, reasons,
     lastDayIdx,
