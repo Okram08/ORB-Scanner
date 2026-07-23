@@ -858,7 +858,7 @@ function saveHistory(history) {
 // "+ Ajouter au suivi" sur une carte Long/Short. Pas de dédoublonnage automatique : si tu
 // cliques plusieurs fois, ça ajoute plusieurs lignes (au cas où tu prends le même ticker
 // à deux reprises dans la même journée, ce qui est ton choix, pas une erreur à filtrer).
-function addTradeToHistory({ ticker, direction, entry, stop, target, positionValue, shares, orbMinutes }) {
+function addTradeToHistory({ ticker, direction, entry, stop, target, positionValue, shares, orbMinutes, grade }) {
   const history = loadHistory();
   const today = new Date().toISOString().slice(0, 10);
 
@@ -872,6 +872,7 @@ function addTradeToHistory({ ticker, direction, entry, stop, target, positionVal
     entry, stop, target,
     positionValue: positionValue ?? null,
     shares: shares ?? null,
+    grade: grade || null, // score S/A/B/C/D/E figé au moment où le trade a été ajouté au suivi
     outcome: 'pending', // 'pending' | 'win' | 'loss' | 'breakeven' — modifiable manuellement dans l'historique
   });
 
@@ -913,6 +914,17 @@ function renderHistoryPage() {
   const resolved = wins + losses;
   const winrate = resolved > 0 ? ((wins / resolved) * 100).toFixed(0) : '—';
 
+  // Résumé winrate par grade — utile pour vérifier si les meilleurs scores
+  // performent effectivement mieux sur la durée, une fois assez de trades enregistrés.
+  const grades = ['S', 'A', 'B', 'C', 'D', 'E'];
+  const gradeStatsHtml = grades.map(g => {
+    const tradesForGrade = history.filter(h => h.grade === g && (h.outcome === 'win' || h.outcome === 'loss'));
+    if (tradesForGrade.length === 0) return null;
+    const w = tradesForGrade.filter(h => h.outcome === 'win').length;
+    const wr = ((w / tradesForGrade.length) * 100).toFixed(0);
+    return `<span style="margin-right:14px;"><strong style="color:var(--text-bright);">${g}</strong>: ${wr}% (${tradesForGrade.length})</span>`;
+  }).filter(Boolean).join('');
+
   const rows = history.map(h => {
     const outcomeMeta = {
       win: { label: 'Gagné', cls: 'tag-good' },
@@ -932,11 +944,15 @@ function renderHistoryPage() {
         <button class="outcome-btn" data-id="${h.id}" data-delete="1" title="Supprimer" style="border-color:var(--text-dim); color:var(--text-dim);">🗑</button>
       </div>`;
 
+    const gradeColors = { S: 'var(--bull)', A: 'var(--bull)', B: 'var(--warn)', C: 'var(--warn)', D: 'var(--bear)', E: 'var(--bear)' };
+    const gradeCell = h.grade ? `<span style="font-weight:700; color:${gradeColors[h.grade] || 'var(--text-dim)'}; font-family:var(--mono);">${h.grade}</span>` : '<span style="color:var(--text-dim);">—</span>';
+
     return `
       <tr>
         <td class="scan-ticker">${h.ticker}</td>
         <td style="font-family:var(--sans); font-size:12px; color:var(--text-dim)">${h.date}</td>
         <td style="color:${dirColor}; font-weight:600;">${dirLabel}</td>
+        <td>${gradeCell}</td>
         <td>${h.entry.toFixed(2)}</td>
         <td style="color:var(--bear)">${h.stop.toFixed(2)}</td>
         <td style="color:var(--bull)">${h.target.toFixed(2)}</td>
@@ -960,10 +976,12 @@ function renderHistoryPage() {
       <span class="signal-detail">${wins} gagné${wins > 1 ? 's' : ''} · ${losses} perdu${losses > 1 ? 's' : ''} · ${breakeven} neutre${breakeven > 1 ? 's' : ''} · ${pending} en cours${resolved > 0 ? ` · winrate: ${winrate}%` : ''}</span>
     </div>
 
+    ${gradeStatsHtml ? `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:16px;">Winrate par grade : ${gradeStatsHtml}</div>` : ''}
+
     <table class="scan-table">
       <thead>
         <tr>
-          <th>Ticker</th><th>Date</th><th>Direction</th><th>Entrée</th><th>Stop</th><th>Target</th><th>Montant</th><th>Résultat</th>
+          <th>Ticker</th><th>Date</th><th>Direction</th><th>Grade</th><th>Entrée</th><th>Stop</th><th>Target</th><th>Montant</th><th>Résultat</th>
         </tr>
       </thead>
       <tbody>${rows}</tbody>
@@ -1157,6 +1175,7 @@ function renderResults(ticker, data, a, orbMinutes) {
         positionValue: btn.dataset.position ? parseFloat(btn.dataset.position) : null,
         shares: btn.dataset.shares ? parseFloat(btn.dataset.shares) : null,
         orbMinutes: parseInt(btn.dataset.orb, 10),
+        grade: btn.dataset.grade,
       });
       btn.textContent = '✓ Ajouté au suivi';
       btn.disabled = true;
@@ -1243,7 +1262,7 @@ function renderTradeLevels(a, ticker, orbMinutes) {
         <div class="trade-row"><span class="trade-row-label">Risque / Reward</span><span class="trade-row-value">${riskLong.toFixed(2)} / ${rewardLong.toFixed(2)}</span></div>
         ${renderSizingRow(sizingLong)}
         <div class="trade-card-note">${long.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
-        <button class="add-to-history-btn" data-direction="long" data-ticker="${ticker}" data-orb="${orbMinutes}" data-entry="${long.entry}" data-stop="${long.stop}" data-target="${long.target}" data-position="${sizingLong ? sizingLong.positionValue : ''}" data-shares="${sizingLong ? sizingLong.shares : ''}">+ Ajouter au suivi</button>
+        <button class="add-to-history-btn" data-direction="long" data-ticker="${ticker}" data-orb="${orbMinutes}" data-entry="${long.entry}" data-stop="${long.stop}" data-target="${long.target}" data-position="${sizingLong ? sizingLong.positionValue : ''}" data-shares="${sizingLong ? sizingLong.shares : ''}" data-grade="${a.setupScore.grade}">+ Ajouter au suivi</button>
       </div>
 
       <div class="trade-card ${isShortActive ? 'active-short' : ''}">
@@ -1257,7 +1276,7 @@ function renderTradeLevels(a, ticker, orbMinutes) {
         <div class="trade-row"><span class="trade-row-label">Risque / Reward</span><span class="trade-row-value">${riskShort.toFixed(2)} / ${rewardShort.toFixed(2)}</span></div>
         ${renderSizingRow(sizingShort)}
         <div class="trade-card-note">${short.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
-        <button class="add-to-history-btn" data-direction="short" data-ticker="${ticker}" data-orb="${orbMinutes}" data-entry="${short.entry}" data-stop="${short.stop}" data-target="${short.target}" data-position="${sizingShort ? sizingShort.positionValue : ''}" data-shares="${sizingShort ? sizingShort.shares : ''}">+ Ajouter au suivi</button>
+        <button class="add-to-history-btn" data-direction="short" data-ticker="${ticker}" data-orb="${orbMinutes}" data-entry="${short.entry}" data-stop="${short.stop}" data-target="${short.target}" data-position="${sizingShort ? sizingShort.positionValue : ''}" data-shares="${sizingShort ? sizingShort.shares : ''}" data-grade="${a.setupScore.grade}">+ Ajouter au suivi</button>
       </div>
     </div>
   `;
