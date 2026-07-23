@@ -308,46 +308,6 @@ els.btn.addEventListener('click', runAnalysis);
 els.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') runAnalysis(); });
 document.getElementById('history-btn').addEventListener('click', renderHistoryPage);
 
-// ------------------------------------------------------------
-// SCORE FIGÉ — le score de qualité de setup est capturé au moment précis où le
-// breakout est détecté pour la première fois (ticker + jour + direction), puis ne
-// bouge plus pour le reste de la fenêtre. Sans ça, la "distance au prix actuel" fait
-// sauter la note d'un scan à l'autre à cause du simple bruit de marché (le prix oscille
-// de quelques ticks autour du niveau), ce qui casse la lecture "je regarde, je décide".
-const FROZEN_SCORE_KEY = 'orb-scanner-frozen-scores';
-
-function loadFrozenScores() {
-  try {
-    const raw = localStorage.getItem(FROZEN_SCORE_KEY);
-    return raw ? JSON.parse(raw) : {};
-  } catch {
-    return {};
-  }
-}
-
-function saveFrozenScores(scores) {
-  try { localStorage.setItem(FROZEN_SCORE_KEY, JSON.stringify(scores)); } catch { /* quota / navigation privée */ }
-}
-
-function getOrFreezeScore(ticker, signal, freshScore) {
-  if (signal !== 'bull' && signal !== 'bear') return freshScore; // pas de breakout, rien à figer
-
-  const today = new Date().toISOString().slice(0, 10);
-  const key = `${ticker}|${today}|${signal}`;
-  const scores = loadFrozenScores();
-
-  if (scores[key]) {
-    return scores[key]; // déjà figé pour ce breakout précis — on renvoie la version gelée
-  }
-
-  // Première détection de ce breakout aujourd'hui : on fige le score maintenant
-  const frozenAt = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  const frozen = { ...freshScore, frozenAt };
-  scores[key] = frozen;
-  saveFrozenScores(scores);
-  return frozen;
-}
-
 // Récupère + calcule tout pour un ticker, sans toucher au DOM — réutilisable
 // pour la vue détaillée (runAnalysis) et le scan groupé (runScanAll).
 async function analyzeTicker(ticker, orbMinutes) {
@@ -358,10 +318,10 @@ async function analyzeTicker(ticker, orbMinutes) {
   }
   const analysis = computeIndicators(parsed, orbMinutes);
 
-  // Le score affiché est figé au moment de la première détection du breakout du jour —
-  // stable ensuite, même si tu rescans plusieurs fois dans la fenêtre.
-  analysis.setupScore = getOrFreezeScore(ticker, analysis.signal, analysis.setupScore);
-
+  // Le score n'est plus figé : il évolue volontairement avec la persistance du
+  // breakout dans le temps (voir computeSetupScore) — basé uniquement sur des
+  // bougies closes, donc stable entre deux scans rapprochés, mais qui progresse
+  // légitimement à mesure que le niveau tient (ou se dégrade en cas de fakeout).
   return { parsed, analysis };
 }
 
@@ -561,56 +521,37 @@ function parseYahooResponse(raw) {
 // présente les caractéristiques qu'on a identifiées comme favorables à un ORB (distance
 // raisonnable au niveau de breakout, confluence des filtres, range ni trop large ni trop
 // étroit, tendance franche, volume confirmé). Documenté et transparent, pas une boîte noire.
-function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, adx, relativeVolume, priceAboveVwap }) {
-  // Cas "neutre" (pas encore de breakout confirmé) : on évalue quand même un score,
-  // basé sur le côté du range le plus proche du prix actuel — utile pour repérer à
-  // l'avance les tickers qui approchent d'un niveau avec un bon contexte, avant même
-  // que le franchissement + la confluence des filtres ne confirment le signal.
+function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, adx, relativeVolume, priceAboveVwap, persistence }) {
+  // Cas "neutre" (pas encore de breakout confirmé, ou fakeout invalidé) : on évalue
+  // quand même un score indicatif, basé sur le côté du range le plus proche du prix
+  // actuel — utile pour repérer à l'avance les tickers qui approchent d'un niveau.
   const distToHigh = orbHigh - lastClose;
   const distToLow = lastClose - orbLow;
   const isNeutral = signal === 'neutral';
   const isLong = isNeutral ? (distToHigh <= distToLow) : (signal === 'bull');
-  const breakoutLevel = isLong ? orbHigh : orbLow;
-
-  // Si le prix n'a pas encore cassé, la "distance" est comptée comme négative
-  // (encore à l'intérieur du range) — donc pas de malus de type "trop loin",
-  // juste une indication de proximité au niveau.
-  const rawDistance = isLong ? (lastClose - breakoutLevel) : (breakoutLevel - lastClose);
-  const distanceFromLevel = Math.abs(rawDistance);
-  const distancePct = (distanceFromLevel / breakoutLevel) * 100;
-  const notYetBroken = rawDistance < 0; // le prix est encore dans le range, côté évalué
 
   let points = 0;
   const maxPoints = 20;
   const details = [];
 
   if (isNeutral) {
-    details.push(`ℹ Pas encore de breakout confirmé — score indicatif côté ${isLong ? 'haussier (ORB High)' : 'baissier (ORB Low)'}, le plus proche actuellement`);
+    details.push(`ℹ Pas de breakout confirmé actuellement — score indicatif côté ${isLong ? 'haussier (ORB High)' : 'baissier (ORB Low)'}, le plus proche`);
   }
 
-  // 1. Distance au niveau de breakout (max 6 pts) — critère le plus important pour
-  //    savoir si un ordre limite a encore un sens. Si le prix n'a pas encore cassé,
-  //    être proche du niveau est un BON signe (approche imminente) ; si le prix a déjà
-  //    cassé, être loin est un MAUVAIS signe (le mouvement est déjà fait).
-  let distanceTooFar = false;
-  if (notYetBroken) {
-    if (distancePct < 0.15) {
-      points += 6; details.push(`✓ Prix tout proche du niveau ${isLong ? 'ORB High' : 'ORB Low'} (${distancePct.toFixed(2)}%) — cassure imminente possible`);
-    } else if (distancePct < 0.4) {
-      points += 4; details.push(`~ Prix se rapproche du niveau (${distancePct.toFixed(2)}%) — à surveiller`);
-    } else {
-      points += 2; details.push(`Prix encore loin du niveau (${distancePct.toFixed(2)}%) — rien d'imminent`);
-    }
-  } else if (distancePct < 0.15) {
-    points += 6; details.push(`✓ Prix encore très proche du niveau de breakout (+${distancePct.toFixed(2)}%) — ordre limite pertinent`);
-  } else if (distancePct < 0.4) {
-    points += 4; details.push(`~ Prix modérément éloigné du niveau (+${distancePct.toFixed(2)}%) — encore jouable`);
-  } else if (distancePct < 0.8) {
-    points += 2; details.push(`⚠ Prix déjà bien éloigné du niveau (+${distancePct.toFixed(2)}%) — ordre limite risque de ne jamais se déclencher`);
-    distanceTooFar = true;
+  // 1. Persistance du breakout dans le temps (max 6 pts) — remplace l'ancien critère de
+  // "distance au niveau" qui se basait sur le prix instantané et rendait le score
+  // instable seconde par seconde. Ici, plus le niveau tient depuis longtemps sans
+  // retour dans le range, plus le score monte — cohérent avec l'idée qu'un breakout
+  // qui dure est un signal plus fiable qu'un breakout qui vient tout juste d'apparaître.
+  let distanceTooFar = false; // renommé conceptuellement : "signal pas encore assez confirmé"
+  if (!persistence) {
+    points += 2; details.push(`ℹ Pas encore assez de bougies closes depuis l'ouverture pour évaluer la tenue du niveau`);
+  } else if (persistence.minutesSinceBreakout < 5) {
+    points += 2; details.push(`~ Breakout très récent (${persistence.minutesSinceBreakout} min) — pas encore confirmé par la durée, prudence`);
+  } else if (persistence.minutesSinceBreakout < 15) {
+    points += 4; details.push(`✓ Niveau tenu depuis ${persistence.minutesSinceBreakout} min sans retour dans le range`);
   } else {
-    points += 0; details.push(`✗ Prix trop loin du niveau de breakout (+${distancePct.toFixed(2)}%) — trop tard pour un ordre limite propre`);
-    distanceTooFar = true;
+    points += 6; details.push(`✓ Niveau tenu depuis ${persistence.minutesSinceBreakout} min — breakout confirmé par la durée`);
   }
 
   // 2. Qualité du range ORB vs ATR (max 5 pts) — un range ni trop large (risque énorme)
@@ -633,13 +574,16 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
     points += 0; details.push(`✗ ADX ${adx.toFixed(0)} — marché en range, risque de retournement`);
   }
 
-  // 4. Volume relatif (max 4 pts)
-  if (relativeVolume > 2) {
-    points += 4; details.push(`✓ Volume ${relativeVolume.toFixed(1)}× la normale — forte conviction`);
-  } else if (relativeVolume > 1.2) {
-    points += 2; details.push(`~ Volume ${relativeVolume.toFixed(1)}× la normale — correct`);
+  // 4. Volume de confirmation depuis le breakout (max 4 pts) — utilise le volume cumulé
+  // DEPUIS la cassure quand disponible (plus pertinent que le volume au seul moment T),
+  // sinon retombe sur le volume relatif classique de l'ORB.
+  const volumeToUse = persistence ? persistence.relativeVolumeSinceBreakout : relativeVolume;
+  if (volumeToUse > 2) {
+    points += 4; details.push(`✓ Volume ${volumeToUse.toFixed(1)}× la normale depuis la cassure — forte conviction`);
+  } else if (volumeToUse > 1.2) {
+    points += 2; details.push(`~ Volume ${volumeToUse.toFixed(1)}× la normale depuis la cassure — correct`);
   } else {
-    points += 0; details.push(`✗ Volume ${relativeVolume.toFixed(1)}× la normale — participation faible`);
+    points += 0; details.push(`✗ Volume ${volumeToUse.toFixed(1)}× la normale depuis la cassure — participation faible`);
   }
 
   const pct = points / maxPoints;
@@ -651,19 +595,9 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
   else if (pct >= 0.2) grade = 'D';
   else grade = 'E';
 
-  // Plafond : si le prix est déjà trop loin du niveau de breakout, un ordre limite n'a
-  // plus vraiment de sens quel que soit le reste du contexte — donc le grade ne peut
-  // pas dépasser D, pour éviter qu'un bon ADX/volume masque ce problème pratique.
-  if (distanceTooFar) {
-    const gradeOrder = ['S', 'A', 'B', 'C', 'D', 'E'];
-    const currentIdx = gradeOrder.indexOf(grade);
-    const dIdx = gradeOrder.indexOf('D');
-    if (currentIdx < dIdx) grade = 'D';
-  }
-
-  // Plafond additionnel : tant qu'aucun breakout n'est confirmé (signal encore neutre),
-  // le grade ne peut pas dépasser B — un bon contexte n'est qu'une anticipation, pas
-  // un signal validé par la confluence VWAP + ADX + volume sur un vrai franchissement.
+  // Plafond : tant qu'aucun breakout n'est confirmé (signal encore neutre — jamais cassé
+  // ou fakeout invalidé), le grade ne peut pas dépasser B — un bon contexte n'est qu'une
+  // anticipation, pas un signal validé par un vrai franchissement qui tient.
   if (isNeutral) {
     const gradeOrder = ['S', 'A', 'B', 'C', 'D', 'E'];
     const currentIdx = gradeOrder.indexOf(grade);
@@ -671,7 +605,7 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
     if (currentIdx < bIdx) grade = 'B';
   }
 
-  return { grade, points, maxPoints, details, distancePct, isNeutral, isLong };
+  return { grade, points, maxPoints, details, isNeutral, isLong, persistence };
 }
 
 function computeIndicators(data, orbMinutes) {
@@ -759,6 +693,50 @@ function computeIndicators(data, orbMinutes) {
     reasons.push('prix encore dans le range d\'ouverture, pas de breakout');
   }
 
+  // --- Persistance du breakout dans le temps ---
+  // Un breakout qui vient de se produire et un breakout qui tient depuis 20 minutes
+  // sans retour dans le range ne se valent pas — le second est bien plus fiable.
+  // On regarde, parmi les bougies CLOSES depuis la sortie du range ORB, combien sont
+  // restées du bon côté du niveau, et si un retour dans le range (fakeout) a eu lieu.
+  let persistence = null;
+  if (signal === 'bull' || signal === 'bear') {
+    const isLong = signal === 'bull';
+    const level = isLong ? orbHigh : orbLow;
+
+    // Bougies post-ORB, closes uniquement (jusqu'à lastIdx inclus — pas la bougie live)
+    const postOrbClosedIdx = lastDayIdx.filter(i => i > orbIdx[orbIdx.length - 1] && i <= lastIdx);
+
+    // Trouve la première bougie close qui a franchi le niveau (le vrai moment de cassure)
+    const breakoutPointIdx = postOrbClosedIdx.find(i => isLong ? closes[i] > level : closes[i] < level);
+
+    if (breakoutPointIdx != null) {
+      const candlesSinceBreakout = postOrbClosedIdx.filter(i => i >= breakoutPointIdx);
+      const minutesSinceBreakout = (candlesSinceBreakout.length - 1) * 5;
+
+      // Fakeout : une bougie close est repassée de l'autre côté du niveau après la cassure
+      const hasReturnedInsideRange = candlesSinceBreakout.some(i => isLong ? closes[i] <= level : closes[i] >= level);
+
+      // Volume cumulé depuis la cassure vs volume moyen attendu sur la même durée
+      const volumeSinceBreakout = candlesSinceBreakout.reduce((s, i) => s + volumes[i], 0);
+      const expectedVolumeSinceBreakout = avgVolumePerCandle * candlesSinceBreakout.length;
+      const relativeVolumeSinceBreakout = expectedVolumeSinceBreakout > 0 ? volumeSinceBreakout / expectedVolumeSinceBreakout : 1;
+
+      persistence = {
+        minutesSinceBreakout,
+        candlesHeld: candlesSinceBreakout.length,
+        hasReturnedInsideRange,
+        relativeVolumeSinceBreakout,
+      };
+
+      // Fakeout confirmé : le niveau n'a pas tenu, le signal est invalidé même si la
+      // dernière bougie close est repassée du bon côté (mouvement erratique, pas fiable)
+      if (hasReturnedInsideRange) {
+        signal = 'neutral';
+        reasons = ['⚠ Fakeout détecté — le prix est repassé dans le range ORB après avoir cassé, signal invalidé'];
+      }
+    }
+  }
+
   // --- Niveaux de trade (long / short) ---
   // Règle : stop à l'opposé du range ORB (niveau structurel — c'est justement le niveau
   // que le prix vient de casser), mais plafonné à 1.5x ATR pour éviter un risque démesuré
@@ -795,7 +773,7 @@ function computeIndicators(data, orbMinutes) {
   // que le setup a les caractéristiques d'un bon setup ORB sur le papier.
   const setupScore = computeSetupScore({
     signal, lastClose, orbHigh, orbLow, orbRange, atr, adx, relativeVolume,
-    priceAboveVwap,
+    priceAboveVwap, persistence,
   });
 
   return {
@@ -1264,7 +1242,9 @@ function renderSetupScore(a) {
     : 'Qualité de setup (ordre limite) — breakout confirmé';
 
   const detailsHtml = s.details.map(d => `<div style="padding:4px 0; font-size:12px; color:var(--text);">${escapeHtml(d)}</div>`).join('');
-  const frozenBadge = s.frozenAt ? `<div style="font-size:11px; color:var(--vwap); font-family:var(--mono); margin-top:4px;">🔒 Score figé à ${s.frozenAt} — stable pour le reste de la séance</div>` : '';
+  const persistenceBadge = (s.persistence && !s.isNeutral)
+    ? `<div style="font-size:11px; color:var(--vwap); font-family:var(--mono); margin-top:4px;">⏱ Niveau tenu depuis ${s.persistence.minutesSinceBreakout} min — le score se renforce si ça continue</div>`
+    : '';
 
   return `
     <div class="indicator-card" style="margin-top:20px; border-color:${color}; ${s.isNeutral ? 'border-style:dashed;' : ''}">
@@ -1274,7 +1254,7 @@ function renderSetupScore(a) {
           <div class="indicator-label" style="margin-bottom:2px;">${cardTitle}</div>
           <div style="font-size:13px; font-weight:600; color:var(--text-bright);">${gradeVerdict[s.grade]}</div>
           <div style="font-size:11px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;">${s.points}/${s.maxPoints} points — score de règles, pas une probabilité statistique</div>
-          ${frozenBadge}
+          ${persistenceBadge}
         </div>
       </div>
       ${detailsHtml}
