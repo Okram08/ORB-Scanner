@@ -531,7 +531,7 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
   const isLong = isNeutral ? (distToHigh <= distToLow) : (signal === 'bull');
 
   let points = 0;
-  const maxPoints = 20;
+  const maxPoints = 28;
   const details = [];
 
   if (isNeutral) {
@@ -587,6 +587,32 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
     points += 2; details.push(`~ Volume ${volumeToUse.toFixed(1)}× la normale depuis la cassure — correct`);
   } else {
     points += 0; details.push(`✗ Volume ${volumeToUse.toFixed(1)}× la normale depuis la cassure — participation faible`);
+  }
+
+  // 5. Faux breakouts précédents sur ce même niveau (max 4 pts) — un niveau déjà testé
+  // et refusé plusieurs fois dans la session inspire moins confiance qu'une cassure nette
+  // sur un niveau "vierge". Chaque tentative ratée réduit le score.
+  if (persistence) {
+    if (persistence.priorFakeouts === 0) {
+      points += 4; details.push(`✓ Premier test de ce niveau dans la session — pas de tentative ratée avant`);
+    } else if (persistence.priorFakeouts === 1) {
+      points += 2; details.push(`⚠ 1 tentative ratée sur ce niveau plus tôt dans la session — niveau déjà "testé"`);
+    } else {
+      points += 0; details.push(`✗ ${persistence.priorFakeouts} tentatives ratées sur ce niveau avant celle-ci — niveau probablement épuisé`);
+    }
+  } else {
+    points += 2; // neutre si pas encore de breakout pour évaluer ça
+  }
+
+  // 6. Structure pré-cassure : accumulation progressive ou spike soudain (max 4 pts) —
+  // un prix qui se rapprochait déjà du niveau sur plusieurs bougies avant de casser
+  // inspire plus confiance qu'un bond isolé d'une seule bougie sans élan préalable.
+  if (persistence && persistence.structureType === 'accumulation') {
+    points += 4; details.push(`✓ Accumulation progressive avant la cassure — mouvement construit, pas un spike isolé`);
+  } else if (persistence && persistence.structureType === 'spike') {
+    points += 1; details.push(`⚠ Cassure en spike soudain, sans accumulation progressive avant — plus sujet à un retour rapide`);
+  } else {
+    points += 2; // pas assez de données pour trancher
   }
 
   const pct = points / maxPoints;
@@ -736,11 +762,52 @@ function computeIndicators(data, orbMinutes) {
       const expectedVolumeSinceBreakout = avgVolumePerCandle * candlesSinceBreakout.length;
       const relativeVolumeSinceBreakout = expectedVolumeSinceBreakout > 0 ? volumeSinceBreakout / expectedVolumeSinceBreakout : 1;
 
+      // --- Faux breakouts précédents sur ce même niveau ---
+      // Compte, parmi les bougies AVANT la cassure actuelle, combien de fois le prix a
+      // déjà dépassé ce niveau puis est revenu à l'intérieur (tentatives ratées). Plus il
+      // y en a eu, plus le niveau a déjà été "testé et refusé" — ce qui réduit la
+      // confiance dans le fait que CETTE cassure-ci tienne mieux que les précédentes.
+      const candlesBeforeBreakout = postOrbClosedIdx.filter(i => i < breakoutPointIdx);
+      let priorFakeouts = 0;
+      let wasOutsideRange = false;
+      for (const i of candlesBeforeBreakout) {
+        const isOutsideNow = isLong ? closes[i] > level : closes[i] < level;
+        if (isOutsideNow && !wasOutsideRange) {
+          // vient de sortir du range — potentiel début de tentative
+          wasOutsideRange = true;
+        } else if (!isOutsideNow && wasOutsideRange) {
+          // était sorti, est revenu à l'intérieur -> une tentative ratée de plus
+          priorFakeouts++;
+          wasOutsideRange = false;
+        }
+      }
+
+      // --- Structure pré-cassure : accumulation progressive ou spike soudain ? ---
+      // Regarde les quelques bougies juste avant la cassure définitive : si le prix se
+      // rapprochait déjà progressivement du niveau (plusieurs bougies avec des sommets/creux
+      // de plus en plus proches), c'est une accumulation — plus fiable qu'un bond isolé
+      // d'une seule bougie qui n'avait pas d'élan progressif avant.
+      const lookback = 3; // nombre de bougies avant la cassure à examiner
+      const preBreakoutIdx = postOrbClosedIdx.filter(i => i < breakoutPointIdx).slice(-lookback);
+      let structureType = 'insufficient_data';
+      if (preBreakoutIdx.length >= 2) {
+        const relevantPrices = isLong ? preBreakoutIdx.map(i => highs[i]) : preBreakoutIdx.map(i => lows[i]);
+        // Progression monotone vers le niveau = accumulation ; sinon = mouvement erratique/spike
+        let isProgressive = true;
+        for (let k = 1; k < relevantPrices.length; k++) {
+          const gettingCloser = isLong ? relevantPrices[k] >= relevantPrices[k - 1] : relevantPrices[k] <= relevantPrices[k - 1];
+          if (!gettingCloser) { isProgressive = false; break; }
+        }
+        structureType = isProgressive ? 'accumulation' : 'spike';
+      }
+
       persistence = {
         minutesSinceBreakout,
         candlesHeld: candlesSinceBreakout.length,
         hasReturnedInsideRange,
         relativeVolumeSinceBreakout,
+        priorFakeouts,
+        structureType,
       };
 
       // Fakeout confirmé : le niveau n'a pas tenu, le signal est invalidé même si la
