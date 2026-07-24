@@ -1,869 +1,497 @@
-<!DOCTYPE html>
-<html lang="fr">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>ORB Scanner</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
-<style>
-  :root {
-    --bg: #0A0B0D;
-    --bg-panel: #121316;
-    --bg-panel-raised: #17181C;
-    --border: #24262B;
-    --text: #C8C6C0;
-    --text-dim: #6B6D73;
-    --text-bright: #F0EEE8;
-    --bull: #4A9B7F;
-    --bull-dim: #2A4A3F;
-    --bear: #C4554A;
-    --bear-dim: #4A2C29;
-    --warn: #D4A24C;
-    --vwap: #7B8FA6;
-    --mono: 'JetBrains Mono', monospace;
-    --sans: 'Inter', sans-serif;
-  }
-
-  * { margin: 0; padding: 0; box-sizing: border-box; }
-
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: var(--sans);
-    min-height: 100vh;
-  }
-
-  .app {
-    max-width: 1400px;
-    margin: 0 auto;
-    padding: 24px;
-  }
-
-  /* Header */
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding-bottom: 20px;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: 24px;
-    flex-wrap: wrap;
-    gap: 16px;
-  }
-
-  .brand {
-    display: flex;
-    align-items: baseline;
-    gap: 10px;
-  }
-
-  .brand-mark {
-    font-family: var(--mono);
-    font-weight: 700;
-    font-size: 20px;
-    color: var(--text-bright);
-    letter-spacing: -0.02em;
-  }
-
-  .brand-mark span { color: var(--bull); }
-
-  .brand-sub {
-    font-size: 12px;
-    color: var(--text-dim);
-    font-family: var(--mono);
-  }
-
-  /* Search bar */
-  .search-row {
-    display: flex;
-    gap: 10px;
-    align-items: center;
-  }
-
-  #ticker-input {
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    color: var(--text-bright);
-    font-family: var(--mono);
-    font-size: 15px;
-    font-weight: 600;
-    padding: 10px 14px;
-    border-radius: 6px;
-    width: 140px;
-    text-transform: uppercase;
-    letter-spacing: 0.02em;
-    transition: border-color 0.15s ease;
-  }
-
-  #ticker-input:focus {
-    outline: none;
-    border-color: var(--vwap);
-  }
-
-  #ticker-input::placeholder {
-    color: var(--text-dim);
-    text-transform: none;
-    font-weight: 400;
-  }
-
-  .orb-select {
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-family: var(--sans);
-    font-size: 13px;
-    padding: 10px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-
-  #search-btn {
-    background: var(--bull-dim);
-    border: 1px solid var(--bull);
-    color: var(--bull);
-    font-family: var(--sans);
-    font-weight: 600;
-    font-size: 13px;
-    padding: 10px 18px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  #search-btn:hover { background: var(--bull); color: var(--bg); }
-  #search-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  #history-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    font-family: var(--sans);
-    font-weight: 600;
-    font-size: 13px;
-    padding: 10px 14px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  #history-btn:hover { border-color: var(--vwap); color: var(--text); }
-
-  #backtest-link {
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    font-family: var(--sans);
-    font-weight: 600;
-    font-size: 13px;
-    padding: 10px 14px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    text-decoration: none;
-    display: inline-flex;
-    align-items: center;
-  }
-
-  #backtest-link:hover { border-color: var(--warn); color: var(--text); }
-
-  /* Fenêtre de trading */
-  .session-status {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 10px 16px;
-    border-radius: 8px;
-    font-family: var(--mono);
-    font-size: 12px;
-    font-weight: 600;
-    margin-top: 16px;
-    border: 1px solid;
-  }
-
-  .session-status .dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .session-active { background: rgba(74,155,127,0.08); border-color: var(--bull); color: var(--bull); }
-  .session-active .dot { background: var(--bull); box-shadow: 0 0 8px var(--bull); animation: pulse 1.5s ease-in-out infinite; }
-
-  .session-upcoming { background: rgba(212,162,76,0.08); border-color: var(--warn); color: var(--warn); }
-  .session-upcoming .dot { background: var(--warn); }
-
-  .session-closed { background: var(--bg-panel); border-color: var(--border); color: var(--text-dim); }
-  .session-closed .dot { background: var(--text-dim); }
-
-  .session-detail {
-    font-family: var(--sans);
-    font-weight: 400;
-    color: var(--text-dim);
-    font-size: 11px;
-  }
-
-  /* Empty state */
-  .empty-state {
-    text-align: center;
-    padding: 100px 20px;
-    color: var(--text-dim);
-  }
-
-  .empty-state .glyph {
-    font-family: var(--mono);
-    font-size: 42px;
-    color: var(--border);
-    margin-bottom: 16px;
-    letter-spacing: 4px;
-  }
-
-  .empty-state p { font-size: 14px; max-width: 380px; margin: 0 auto; line-height: 1.6; }
-
-  .empty-state .hint {
-    margin-top: 20px;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--text-dim);
-  }
-
-  /* Loading */
-  .loading-state {
-    text-align: center;
-    padding: 100px 20px;
-    color: var(--text-dim);
-    font-family: var(--mono);
-    font-size: 13px;
-  }
-
-  .loading-dot {
-    display: inline-block;
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    background: var(--warn);
-    margin-right: 8px;
-    animation: pulse 1.2s ease-in-out infinite;
-  }
-
-  @keyframes pulse {
-    0%, 100% { opacity: 0.3; }
-    50% { opacity: 1; }
-  }
-
-  /* Error */
-  .error-state {
-    text-align: center;
-    padding: 60px 20px;
-    color: var(--bear);
-    font-family: var(--mono);
-    font-size: 13px;
-    background: var(--bg-panel);
-    border: 1px solid var(--bear-dim);
-    border-radius: 8px;
-  }
-
-  /* Ticker header row */
-  .ticker-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 20px;
-    flex-wrap: wrap;
-    gap: 16px;
-  }
-
-  .ticker-id {
-    font-family: var(--mono);
-    font-size: 28px;
-    font-weight: 700;
-    color: var(--text-bright);
-  }
-
-  .ticker-price {
-    font-family: var(--mono);
-    font-size: 28px;
-    font-weight: 700;
-  }
-
-  .ticker-change {
-    font-family: var(--mono);
-    font-size: 14px;
-    font-weight: 500;
-    padding: 3px 8px;
-    border-radius: 4px;
-  }
-
-  .up { color: var(--bull); }
-  .down { color: var(--bear); }
-  .up-bg { background: var(--bull-dim); color: var(--bull); }
-  .down-bg { background: var(--bear-dim); color: var(--bear); }
-
-  /* Signal banner */
-  .signal-banner {
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 14px 18px;
-    border-radius: 8px;
-    margin-bottom: 20px;
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 600;
-    border: 1px solid;
-  }
-
-  .signal-banner .signal-icon {
-    font-size: 16px;
-  }
-
-  .signal-bull { background: var(--bull-dim); border-color: var(--bull); color: var(--bull); }
-  .signal-bear { background: var(--bear-dim); border-color: var(--bear); color: var(--bear); }
-  .signal-neutral { background: var(--bg-panel-raised); border-color: var(--border); color: var(--text-dim); }
-
-  .signal-detail {
-    font-family: var(--sans);
-    font-weight: 400;
-    color: var(--text);
-    font-size: 12px;
-  }
-
-  /* Grid layout */
-  .grid {
-    display: grid;
-    grid-template-columns: 1fr 300px;
-    gap: 20px;
-  }
-
-  @media (max-width: 900px) {
-    .grid { grid-template-columns: 1fr; }
-  }
-
-  .chart-panel {
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
-  }
-
-  #chart-container {
-    width: 100%;
-    height: 480px;
-  }
-
-  .chart-legend {
-    display: flex;
-    gap: 18px;
-    padding: 12px 4px 0;
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--text-dim);
-    flex-wrap: wrap;
-  }
-
-  .legend-item { display: flex; align-items: center; gap: 6px; }
-  .legend-swatch { width: 10px; height: 3px; border-radius: 2px; }
-
-  /* Indicators panel */
-  .indicators-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-
-  /* Watchlist */
-  .watchlist-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 14px 0;
-    flex-wrap: wrap;
-  }
-
-  .watchlist-chip {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: 20px;
-    padding: 6px 8px 6px 14px;
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 600;
-    color: var(--text);
-    cursor: pointer;
-    transition: border-color 0.15s ease;
-  }
-
-  .watchlist-chip:hover { border-color: var(--vwap); }
-
-  .watchlist-chip button {
-    background: transparent;
-    border: none;
-    color: var(--text-dim);
-    cursor: pointer;
-    font-size: 15px;
-    line-height: 1;
-    padding: 4px 6px;
-    border-radius: 50%;
-  }
-
-  .watchlist-chip button:hover { background: var(--bg-panel-raised); color: var(--bear); }
-
-  .watchlist-add {
-    display: flex;
-    gap: 6px;
-  }
-
-  #watchlist-input {
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    color: var(--text-bright);
-    font-family: var(--mono);
-    font-size: 13px;
-    padding: 8px 10px;
-    border-radius: 6px;
-    width: 90px;
-    text-transform: uppercase;
-  }
-
-  #watchlist-input:focus { outline: none; border-color: var(--vwap); }
-
-  #watchlist-add-btn {
-    background: var(--bg-panel-raised);
-    border: 1px solid var(--border);
-    color: var(--text);
-    font-family: var(--sans);
-    font-size: 13px;
-    font-weight: 600;
-    padding: 8px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-  }
-
-  #watchlist-add-btn:hover { border-color: var(--vwap); }
-
-  #scan-all-btn {
-    background: var(--warn);
-    border: 1px solid var(--warn);
-    color: #1A1206;
-    font-family: var(--sans);
-    font-weight: 700;
-    font-size: 13px;
-    padding: 9px 18px;
-    border-radius: 6px;
-    cursor: pointer;
-    margin-left: auto;
-  }
-
-  #scan-all-btn:hover { opacity: 0.9; }
-  #scan-all-btn:disabled { opacity: 0.5; cursor: not-allowed; }
-
-  /* Scan table */
-  .scan-table {
-    width: 100%;
-    border-collapse: collapse;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    overflow: hidden;
-  }
-
-  .scan-table th {
-    text-align: left;
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-dim);
-    font-weight: 600;
-    padding: 12px 16px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .scan-table td {
-    padding: 12px 16px;
-    font-family: var(--mono);
-    font-size: 13px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .scan-table tr:last-child td { border-bottom: none; }
-
-  .scan-row {
-    cursor: pointer;
-    transition: background 0.1s ease;
-  }
-
-  .scan-row:hover { background: var(--bg-panel-raised); }
-
-  .scan-ticker {
-    font-weight: 700;
-    color: var(--text-bright);
-    font-size: 14px;
-  }
-
-  .scan-signal-cell {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-weight: 600;
-  }
-
-  .scan-signal-dot {
-    width: 8px; height: 8px;
-    border-radius: 50%;
-    flex-shrink: 0;
-  }
-
-  .dot-bull { background: var(--bull); box-shadow: 0 0 8px var(--bull); }
-  .dot-bear { background: var(--bear); box-shadow: 0 0 8px var(--bear); }
-  .dot-neutral { background: var(--text-dim); }
-  .dot-loading { background: var(--warn); animation: pulse 1s ease-in-out infinite; }
-  .dot-error { background: var(--bear-dim); border: 1px solid var(--bear); }
-
-  .scan-table .row-bull { background: rgba(74,155,127,0.06); }
-  .scan-table .row-bear { background: rgba(196,85,74,0.06); }
-
-  .back-to-scan {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    background: transparent;
-    border: 1px solid var(--border);
-    color: var(--text-dim);
-    font-family: var(--sans);
-    font-size: 12px;
-    padding: 6px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    margin-bottom: 16px;
-  }
-
-  .back-to-scan:hover { border-color: var(--vwap); color: var(--text); }
-
-  .empty-watchlist-hint {
-    font-size: 12px;
-    color: var(--text-dim);
-    font-family: var(--sans);
-    padding: 10px 0;
-  }
-
-  /* Trade levels */
-  .trade-levels {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 16px;
-    margin-top: 20px;
-  }
-
-  @media (max-width: 700px) {
-    .trade-levels { grid-template-columns: 1fr; }
-  }
-
-  .trade-card {
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px 18px;
-  }
-
-  .trade-card.active-long { border-color: var(--bull); background: rgba(74,155,127,0.06); }
-  .trade-card.active-short { border-color: var(--bear); background: rgba(196,85,74,0.06); }
-
-  .trade-card-header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    margin-bottom: 12px;
-  }
-
-  .trade-card-title {
-    font-family: var(--mono);
-    font-weight: 700;
-    font-size: 13px;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-  }
-
-  .trade-card-title.long-title { color: var(--bull); }
-  .trade-card-title.short-title { color: var(--bear); }
-
-  .trade-active-badge {
-    font-size: 10px;
-    font-family: var(--mono);
-    font-weight: 700;
-    padding: 2px 8px;
-    border-radius: 10px;
-    background: var(--warn);
-    color: #1A1206;
-  }
-
-  .trade-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    padding: 6px 0;
-    font-family: var(--mono);
-    font-size: 13px;
-    border-bottom: 1px solid var(--border);
-  }
-
-  .trade-row:last-child { border-bottom: none; }
-
-  .trade-row-label { color: var(--text-dim); font-family: var(--sans); font-size: 12px; }
-  .trade-row-value { font-weight: 700; color: var(--text-bright); }
-
-  .trade-card-note {
-    margin-top: 10px;
-    font-size: 11px;
-    color: var(--text-dim);
-    font-family: var(--sans);
-    line-height: 1.5;
-  }
-
-  .add-to-history-btn {
-    width: 100%;
-    margin-top: 14px;
-    background: var(--bg-panel-raised);
-    border: 1px solid var(--vwap);
-    color: var(--vwap);
-    font-family: var(--sans);
-    font-weight: 600;
-    font-size: 12px;
-    padding: 9px 12px;
-    border-radius: 6px;
-    cursor: pointer;
-    transition: all 0.15s ease;
-  }
-
-  .add-to-history-btn:hover { background: var(--vwap); color: var(--bg); }
-  .add-to-history-btn:disabled { opacity: 0.6; cursor: default; background: var(--bg-panel-raised); color: var(--text-dim); border-color: var(--border); }
-
-  .outcome-btn {
-    background: transparent;
-    border: 1px solid var(--border);
-    font-family: var(--mono);
-    font-size: 11px;
-    font-weight: 700;
-    width: 24px;
-    height: 24px;
-    border-radius: 4px;
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .outcome-btn:hover { background: var(--bg-panel-raised); }
-
-  .indicator-card {
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    padding: 16px;
-  }
-
-  .indicator-label {
-    font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--text-dim);
-    margin-bottom: 8px;
-    font-weight: 600;
-  }
-
-  .indicator-value {
-    font-family: var(--mono);
-    font-size: 22px;
-    font-weight: 700;
-    color: var(--text-bright);
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-  }
-
-  .indicator-unit {
-    font-size: 13px;
-    color: var(--text-dim);
-    font-weight: 400;
-  }
-
-  .indicator-tag {
-    display: inline-block;
-    margin-top: 8px;
-    font-size: 11px;
-    font-family: var(--mono);
-    padding: 2px 8px;
-    border-radius: 10px;
-    font-weight: 600;
-  }
-
-  .tag-good { background: var(--bull-dim); color: var(--bull); }
-  .tag-bad { background: var(--bear-dim); color: var(--bear); }
-  .tag-warn { background: rgba(212,162,76,0.15); color: var(--warn); }
-
-  .indicator-bar-track {
-    width: 100%;
-    height: 5px;
-    background: var(--bg-panel-raised);
-    border-radius: 3px;
-    margin-top: 10px;
-    overflow: hidden;
-  }
-
-  .indicator-bar-fill {
-    height: 100%;
-    border-radius: 3px;
-    transition: width 0.4s ease;
-  }
-
-  /* Balance bar */
-  .balance-bar {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    padding: 12px 16px;
-    background: var(--bg-panel);
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    margin-top: 12px;
-    font-family: var(--mono);
-    font-size: 13px;
-  }
-
-  .balance-bar .balance-label {
-    color: var(--text-dim);
-    font-family: var(--sans);
-    font-size: 12px;
-  }
-
-  .balance-bar .balance-value {
-    font-weight: 700;
-    color: var(--text-bright);
-    cursor: pointer;
-    padding: 4px 10px;
-    border-radius: 4px;
-    border: 1px solid transparent;
-  }
-
-  .balance-bar .balance-value:hover {
-    border-color: var(--vwap);
-  }
-
-  #balance-input, #risk-pct-input {
-    background: var(--bg-panel-raised);
-    border: 1px solid var(--vwap);
-    color: var(--text-bright);
-    font-family: var(--mono);
-    font-size: 13px;
-    font-weight: 700;
-    padding: 4px 8px;
-    border-radius: 4px;
-    width: 110px;
-  }
-
-  #risk-pct-input { width: 55px; }
-
-  .balance-bar .risk-pct {
-    color: var(--text-dim);
-    font-family: var(--sans);
-    font-size: 12px;
-    margin-left: 8px;
-  }
-
-  .balance-bar .risk-pct-value {
-    color: var(--warn);
-    font-weight: 700;
-    font-family: var(--mono);
-    cursor: pointer;
-  }
-
-  .balance-not-set {
-    color: var(--text-dim);
-    font-family: var(--sans);
-    font-size: 12px;
-  }
-
-  /* Position sizing row (dans les trade-cards) */
-  .position-size-row {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    padding: 8px 0;
-    margin-top: 6px;
-    border-top: 1px dashed var(--border);
-    font-family: var(--mono);
-    font-size: 13px;
-  }
-
-  .position-size-row .label {
-    color: var(--text-dim);
-    font-family: var(--sans);
-    font-size: 12px;
-  }
-
-  .position-size-row .value {
-    font-weight: 700;
-    color: var(--vwap);
-  }
-
-  footer {
-    margin-top: 32px;
-    padding-top: 16px;
-    border-top: 1px solid var(--border);
-    font-size: 11px;
-    color: var(--text-dim);
-    font-family: var(--mono);
-    text-align: center;
-    line-height: 1.7;
-  }
-
-  a { color: var(--vwap); }
-</style>
-</head>
-<body>
-<div class="app">
-  <header>
-    <div class="brand">
-      <div class="brand-mark">ORB<span>·</span>SCAN</div>
-      <div class="brand-sub">opening range breakout scanner</div>
+// ============================================================
+// ORB BACKTEST — rejoue la logique ORB du scanner sur l'historique
+// ============================================================
+
+const WORKER_URL = 'https://red-bush-d58eorbscanner.tom-vandendorpe.workers.dev/';
+const RR_RATIO = 2;
+const MAX_STOP_ATR_MULT = 1.5;
+const MIN_MINUTES_FOR_TOP_GRADE = 10;
+
+const els = {
+  tickersInput: document.getElementById('tickers-input'),
+  dateFrom: document.getElementById('date-from'),
+  dateTo: document.getElementById('date-to'),
+  orbWindow: document.getElementById('orb-window-bt'),
+  runBtn: document.getElementById('run-backtest-btn'),
+  resultsContainer: document.getElementById('results-container'),
+  progressContainer: document.getElementById('progress-bar-container'),
+  progressFill: document.getElementById('progress-fill'),
+  progressLabel: document.getElementById('progress-label'),
+  requestEstimate: document.getElementById('request-estimate'),
+};
+
+// Dates par défaut : 90 derniers jours jusqu'à hier (StockData.org peut ne pas avoir
+// aujourd'hui si le marché est encore ouvert / données pas finalisées)
+(function setDefaultDates() {
+  const today = new Date();
+  const yesterday = new Date(today);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const ninetyDaysAgo = new Date(today);
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+
+  els.dateTo.value = yesterday.toISOString().slice(0, 10);
+  els.dateFrom.value = ninetyDaysAgo.toISOString().slice(0, 10);
+  updateRequestEstimate();
+})();
+
+els.tickersInput.addEventListener('input', updateRequestEstimate);
+els.dateFrom.addEventListener('change', updateRequestEstimate);
+els.dateTo.addEventListener('change', updateRequestEstimate);
+
+function updateRequestEstimate() {
+  const tickers = parseTickers();
+  const days = daysBetween(els.dateFrom.value, els.dateTo.value);
+  const chunksPerTicker = Math.ceil(days / 7);
+  const totalRequests = tickers.length * chunksPerTicker;
+  els.requestEstimate.textContent = `${totalRequests} requête${totalRequests > 1 ? 's' : ''}`;
+  els.requestEstimate.style.color = totalRequests > 100 ? 'var(--bear)' : 'var(--warn)';
+}
+
+function parseTickers() {
+  return els.tickersInput.value.split(',').map(t => t.trim().toUpperCase()).filter(Boolean);
+}
+
+function daysBetween(from, to) {
+  if (!from || !to) return 0;
+  const d1 = new Date(from), d2 = new Date(to);
+  return Math.max(1, Math.round((d2 - d1) / (1000 * 60 * 60 * 24)));
+}
+
+els.runBtn.addEventListener('click', runBacktest);
+
+// ------------------------------------------------------------
+// ORCHESTRATION PRINCIPALE
+// ------------------------------------------------------------
+async function runBacktest() {
+  const tickers = parseTickers();
+  const dateFrom = els.dateFrom.value;
+  const dateTo = els.dateTo.value;
+  const orbMinutes = parseInt(els.orbWindow.value, 10);
+
+  if (tickers.length === 0) { alert('Ajoute au moins un ticker.'); return; }
+  if (!dateFrom || !dateTo) { alert('Renseigne une plage de dates.'); return; }
+
+  els.runBtn.disabled = true;
+  els.progressContainer.style.display = 'block';
+  els.resultsContainer.innerHTML = '';
+
+  const allTrades = [];
+  const errors = [];
+
+  // Découpe la plage totale en tranches de 7 jours (limite du plan gratuit StockData.org)
+  const chunks = splitIntoWeeklyChunks(dateFrom, dateTo);
+  const totalSteps = tickers.length * chunks.length;
+  let stepsDone = 0;
+
+  for (const ticker of tickers) {
+    let allCandles = [];
+
+    for (const chunk of chunks) {
+      updateProgress(stepsDone, totalSteps, `Récupération ${ticker} (${chunk.from} → ${chunk.to})...`);
+      try {
+        const candles = await fetchStockDataChunk(ticker, chunk.from, chunk.to);
+        allCandles = allCandles.concat(candles);
+      } catch (e) {
+        errors.push(`${ticker} (${chunk.from} → ${chunk.to}): ${e.message}`);
+      }
+      stepsDone++;
+      updateProgress(stepsDone, totalSteps, `Récupération ${ticker}...`);
+      await sleep(150); // petite pause pour rester sous la limite de requêtes/minute
+    }
+
+    if (allCandles.length === 0) continue;
+
+    updateProgress(stepsDone, totalSteps, `Analyse de ${ticker}...`);
+    const tradesForTicker = analyzeHistoricalData(ticker, allCandles, orbMinutes);
+    allTrades.push(...tradesForTicker);
+  }
+
+  els.progressContainer.style.display = 'none';
+  els.runBtn.disabled = false;
+
+  renderBacktestResults(allTrades, errors, tickers, dateFrom, dateTo);
+}
+
+function updateProgress(done, total, label) {
+  const pct = total > 0 ? (done / total) * 100 : 0;
+  els.progressFill.style.width = `${pct}%`;
+  els.progressLabel.textContent = `${label} (${done}/${total})`;
+}
+
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+function splitIntoWeeklyChunks(dateFrom, dateTo) {
+  const chunks = [];
+  let cursor = new Date(dateFrom);
+  const end = new Date(dateTo);
+
+  while (cursor <= end) {
+    const chunkEnd = new Date(cursor);
+    chunkEnd.setDate(chunkEnd.getDate() + 6);
+    const actualEnd = chunkEnd > end ? end : chunkEnd;
+    chunks.push({ from: cursor.toISOString().slice(0, 10), to: actualEnd.toISOString().slice(0, 10) });
+    cursor = new Date(actualEnd);
+    cursor.setDate(cursor.getDate() + 1);
+  }
+  return chunks;
+}
+
+// ------------------------------------------------------------
+// FETCH — StockData.org via le Worker Cloudflare (proxy + clé API secrète)
+// ------------------------------------------------------------
+async function fetchStockDataChunk(ticker, dateFrom, dateTo) {
+  const proxyUrl = `${WORKER_URL}?source=stockdata&symbols=${encodeURIComponent(ticker)}&date_from=${dateFrom}&date_to=${dateTo}`;
+  const res = await fetch(proxyUrl);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (data.error) throw new Error(data.error);
+  if (!data.data) return [];
+
+  // Format StockData.org -> format candle uniforme { timestamp, open, high, low, close, volume }
+  return data.data
+    .filter(d => d.ticker === ticker)
+    .map(d => ({
+      timestamp: Math.floor(new Date(d.date).getTime() / 1000),
+      open: d.data.open, high: d.data.high, low: d.data.low, close: d.data.close, volume: d.data.volume,
+    }))
+    .sort((a, b) => a.timestamp - b.timestamp);
+}
+
+// ------------------------------------------------------------
+// ANALYSE HISTORIQUE — rejoue la logique ORB jour par jour
+// ------------------------------------------------------------
+function analyzeHistoricalData(ticker, candles, orbMinutes) {
+  const days = groupByTradingDay(candles);
+  const dayKeys = Object.keys(days).sort();
+  const trades = [];
+
+  const candlesPerOrb = Math.max(1, Math.round(orbMinutes / 5));
+
+  for (const dayKey of dayKeys) {
+    const dayIdx = days[dayKey];
+    if (dayIdx.length < candlesPerOrb + 3) continue; // pas assez de bougies ce jour-là
+
+    const highs = dayIdx.map(i => candles[i].high);
+    const lows = dayIdx.map(i => candles[i].low);
+    const closes = dayIdx.map(i => candles[i].close);
+    const volumes = dayIdx.map(i => candles[i].volume);
+
+    const orbHigh = Math.max(...highs.slice(0, candlesPerOrb));
+    const orbLow = Math.min(...lows.slice(0, candlesPerOrb));
+    const orbRange = orbHigh - orbLow;
+
+    const atr = computeATR(highs, lows, closes, Math.min(14, highs.length - 1));
+    const adx = computeADX(highs, lows, closes, Math.min(14, Math.floor(highs.length / 2)));
+    const avgVolumePerCandle = volumes.reduce((s, v) => s + v, 0) / volumes.length;
+
+    // VWAP de la journée
+    let cumPV = 0, cumVol = 0;
+    const vwapByIdx = [];
+    for (let k = 0; k < dayIdx.length; k++) {
+      const tp = (highs[k] + lows[k] + closes[k]) / 3;
+      cumPV += tp * volumes[k];
+      cumVol += volumes[k];
+      vwapByIdx.push(cumVol > 0 ? cumPV / cumVol : tp);
+    }
+
+    // Cherche un breakout haussier ET baissier distincts ce jour-là (comme le ferait
+    // un utilisateur qui checke plusieurs fois entre 15h45 et 17h)
+    for (const direction of ['long', 'short']) {
+      const isLong = direction === 'long';
+      const level = isLong ? orbHigh : orbLow;
+
+      const postOrbIdx = [];
+      for (let k = candlesPerOrb; k < dayIdx.length; k++) postOrbIdx.push(k);
+
+      const breakoutK = postOrbIdx.find(k => isLong ? closes[k] > level : closes[k] < level);
+      if (breakoutK == null) continue;
+
+      // Compte les faux breakouts précédents sur ce niveau (avant ce breakout-ci)
+      let priorFakeouts = 0;
+      let wasOutside = false;
+      for (const k of postOrbIdx) {
+        if (k >= breakoutK) break;
+        const outsideNow = isLong ? closes[k] > level : closes[k] < level;
+        if (outsideNow && !wasOutside) wasOutside = true;
+        else if (!outsideNow && wasOutside) { priorFakeouts++; wasOutside = false; }
+      }
+
+      // Structure pré-cassure (accumulation vs spike)
+      const lookback = 3;
+      const preIdx = postOrbIdx.filter(k => k < breakoutK).slice(-lookback);
+      let structureType = 'insufficient_data';
+      if (preIdx.length >= 2) {
+        const rel = isLong ? preIdx.map(k => highs[k]) : preIdx.map(k => lows[k]);
+        let progressive = true;
+        for (let m = 1; m < rel.length; m++) {
+          const closer = isLong ? rel[m] >= rel[m - 1] : rel[m] <= rel[m - 1];
+          if (!closer) { progressive = false; break; }
+        }
+        structureType = progressive ? 'accumulation' : 'spike';
+      }
+
+      // Persistance : cherche jusqu'où le niveau tient (ou fakeout) après la cassure,
+      // et détermine le moment où le grade "final" aurait été atteint (10 min de tenue)
+      let hasReturnedInsideRange = false;
+      let candlesHeld = 0;
+      for (const k of postOrbIdx) {
+        if (k < breakoutK) continue;
+        candlesHeld++;
+        const stillOutside = isLong ? closes[k] > level : closes[k] < level;
+        if (!stillOutside) { hasReturnedInsideRange = true; break; }
+      }
+
+      if (hasReturnedInsideRange) continue; // fakeout — pas un signal valide, on ignore (cohérent avec le scanner)
+
+      const minutesSinceBreakout = (candlesHeld - 1) * 5;
+      const volumeSinceBreakoutIdx = postOrbIdx.filter(k => k >= breakoutK && k < breakoutK + candlesHeld);
+      const volumeSinceBreakout = volumeSinceBreakoutIdx.reduce((s, k) => s + volumes[k], 0);
+      const expectedVol = avgVolumePerCandle * volumeSinceBreakoutIdx.length;
+      const relativeVolumeSinceBreakout = expectedVol > 0 ? volumeSinceBreakout / expectedVol : 1;
+
+      const priceAboveVwap = closes[breakoutK] > vwapByIdx[breakoutK];
+      const strongAdx = adx > 20;
+      const strongVolume = relativeVolumeSinceBreakout > 1.2;
+      const validSignal = isLong ? (priceAboveVwap && strongAdx && strongVolume) : (!priceAboveVwap && strongAdx && strongVolume);
+      if (!validSignal) continue; // même filtre que le scanner en direct
+
+      const persistence = { minutesSinceBreakout, hasReturnedInsideRange, relativeVolumeSinceBreakout, priorFakeouts, structureType };
+      const setupScore = computeSetupScore({
+        signal: isLong ? 'bull' : 'bear', orbRange, atr, adx, persistence,
+      });
+
+      // Niveaux de trade (identiques à la logique du scanner)
+      const stopDistance = Math.min(orbRange, atr * MAX_STOP_ATR_MULT);
+      const entry = level;
+      const stop = isLong ? entry - stopDistance : entry + stopDistance;
+      const target = isLong ? entry + stopDistance * RR_RATIO : entry - stopDistance * RR_RATIO;
+
+      // Simule le résultat : cherche si TP ou SL est touché sur les bougies restantes du jour
+      let outcome = 'pending'; // pas résolu avant la fin de la session (= clôture manuelle simulée)
+      let exitPrice = closes[dayIdx.length - 1]; // clôture de la journée si rien n'est touché
+      for (let k = breakoutK + candlesHeld; k < dayIdx.length; k++) {
+        if (isLong) {
+          if (lows[k] <= stop) { outcome = 'loss'; exitPrice = stop; break; }
+          if (highs[k] >= target) { outcome = 'win'; exitPrice = target; break; }
+        } else {
+          if (highs[k] >= stop) { outcome = 'loss'; exitPrice = stop; break; }
+          if (lows[k] <= target) { outcome = 'win'; exitPrice = target; break; }
+        }
+      }
+      if (outcome === 'pending') outcome = 'closed_eod'; // clôturé à la fin de journée, ni TP ni SL
+
+      const pnlPerShare = isLong ? (exitPrice - entry) : (entry - exitPrice);
+
+      trades.push({
+        ticker, date: dayKey, direction, grade: setupScore.grade,
+        entry, stop, target, exitPrice, outcome, pnlPerShare,
+        minutesSinceBreakout, priorFakeouts, structureType,
+      });
+    }
+  }
+
+  return trades;
+}
+
+function groupByTradingDay(candles) {
+  const groups = {};
+  for (let i = 0; i < candles.length; i++) {
+    const key = new Date(candles[i].timestamp * 1000).toISOString().slice(0, 10);
+    if (!groups[key]) groups[key] = [];
+    groups[key].push(i);
+  }
+  return groups;
+}
+
+function computeATR(highs, lows, closes, period) {
+  const trs = [];
+  for (let i = 1; i < highs.length; i++) {
+    trs.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+  }
+  const slice = trs.slice(-period);
+  return slice.length ? slice.reduce((s, v) => s + v, 0) / slice.length : (highs[highs.length - 1] - lows[lows.length - 1]) || 1;
+}
+
+function computeADX(highs, lows, closes, period) {
+  const len = highs.length;
+  if (len < period * 2 || period < 1) return 15; // valeur neutre si pas assez de données
+  const plusDM = [], minusDM = [], tr = [];
+  for (let i = 1; i < len; i++) {
+    const upMove = highs[i] - highs[i - 1];
+    const downMove = lows[i - 1] - lows[i];
+    plusDM.push((upMove > downMove && upMove > 0) ? upMove : 0);
+    minusDM.push((downMove > upMove && downMove > 0) ? downMove : 0);
+    tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
+  }
+  const smooth = (arr, p) => {
+    const out = [];
+    let sum = arr.slice(0, p).reduce((s, v) => s + v, 0);
+    out.push(sum);
+    for (let i = p; i < arr.length; i++) { sum = sum - (sum / p) + arr[i]; out.push(sum); }
+    return out;
+  };
+  const sTR = smooth(tr, period), sPlus = smooth(plusDM, period), sMinus = smooth(minusDM, period);
+  const dx = [];
+  for (let i = 0; i < sTR.length; i++) {
+    const plusDI = 100 * (sPlus[i] / sTR[i]), minusDI = 100 * (sMinus[i] / sTR[i]);
+    const sum = plusDI + minusDI;
+    dx.push(sum > 0 ? 100 * Math.abs(plusDI - minusDI) / sum : 0);
+  }
+  const adxSlice = dx.slice(-period);
+  return adxSlice.length ? adxSlice.reduce((s, v) => s + v, 0) / adxSlice.length : 15;
+}
+
+// Version simplifiée du score (mêmes règles que app.js, sans le volet "neutre"
+// puisqu'en backtest on n'enregistre que des breakouts confirmés et non-fakeout)
+function computeSetupScore({ signal, orbRange, atr, adx, persistence }) {
+  let points = 0;
+  const maxPoints = 28;
+
+  let notYetConfirmedByTime = false;
+  if (persistence.minutesSinceBreakout < MIN_MINUTES_FOR_TOP_GRADE) {
+    points += 0; notYetConfirmedByTime = true;
+  } else if (persistence.minutesSinceBreakout < 20) {
+    points += 4;
+  } else {
+    points += 6;
+  }
+
+  const rangeToAtrRatio = orbRange / atr;
+  if (rangeToAtrRatio >= 0.8 && rangeToAtrRatio <= 2.5) points += 5;
+  else points += 2;
+
+  if (adx > 30) points += 5;
+  else if (adx > 20) points += 3;
+  else points += 0;
+
+  const vol = persistence.relativeVolumeSinceBreakout;
+  if (vol > 2) points += 4;
+  else if (vol > 1.2) points += 2;
+  else points += 0;
+
+  if (persistence.priorFakeouts === 0) points += 4;
+  else if (persistence.priorFakeouts === 1) points += 2;
+  else points += 0;
+
+  if (persistence.structureType === 'accumulation') points += 4;
+  else if (persistence.structureType === 'spike') points += 1;
+  else points += 2;
+
+  const pct = points / maxPoints;
+  let grade;
+  if (pct >= 0.9) grade = 'S';
+  else if (pct >= 0.75) grade = 'A';
+  else if (pct >= 0.6) grade = 'B';
+  else if (pct >= 0.4) grade = 'C';
+  else if (pct >= 0.2) grade = 'D';
+  else grade = 'E';
+
+  if (notYetConfirmedByTime) {
+    const order = ['S', 'A', 'B', 'C', 'D', 'E'];
+    if (order.indexOf(grade) < order.indexOf('B')) grade = 'B';
+  }
+
+  return { grade, points, maxPoints };
+}
+
+// ------------------------------------------------------------
+// RENDU DES RÉSULTATS
+// ------------------------------------------------------------
+function renderBacktestResults(trades, errors, tickers, dateFrom, dateTo) {
+  if (trades.length === 0) {
+    els.resultsContainer.innerHTML = `
+      <div class="empty-state">
+        <div class="glyph">▤</div>
+        <p>Aucun signal ORB valide trouvé sur cette période pour ces tickers. ${errors.length > 0 ? `<br><br><strong style="color:var(--bear)">Erreurs rencontrées :</strong><br>${errors.map(escapeHtml).join('<br>')}` : ''}</p>
+      </div>
+    `;
+    return;
+  }
+
+  const wins = trades.filter(t => t.outcome === 'win').length;
+  const losses = trades.filter(t => t.outcome === 'loss').length;
+  const closedEod = trades.filter(t => t.outcome === 'closed_eod').length;
+  const resolved = wins + losses;
+  const winrate = resolved > 0 ? ((wins / resolved) * 100).toFixed(1) : '—';
+
+  const totalPnlR = trades.reduce((sum, t) => {
+    const stopDist = Math.abs(t.entry - t.stop);
+    return sum + (stopDist > 0 ? t.pnlPerShare / stopDist : 0);
+  }, 0);
+
+  const grades = ['S', 'A', 'B', 'C', 'D', 'E'];
+  const gradeStats = grades.map(g => {
+    const gTrades = trades.filter(t => t.grade === g && (t.outcome === 'win' || t.outcome === 'loss'));
+    if (gTrades.length === 0) return null;
+    const w = gTrades.filter(t => t.outcome === 'win').length;
+    return { grade: g, winrate: ((w / gTrades.length) * 100).toFixed(0), count: gTrades.length };
+  }).filter(Boolean);
+
+  const rows = trades
+    .sort((a, b) => b.date.localeCompare(a.date))
+    .map(t => {
+      const outcomeLabel = { win: 'Gagné', loss: 'Perdu', closed_eod: 'Clôturé EOD' }[t.outcome];
+      const rowClass = t.outcome === 'win' ? 'row-win' : t.outcome === 'loss' ? 'row-loss' : '';
+      const dirColor = t.direction === 'long' ? 'var(--bull)' : 'var(--bear)';
+      const stopDist = Math.abs(t.entry - t.stop);
+      const pnlR = stopDist > 0 ? (t.pnlPerShare / stopDist).toFixed(2) : '—';
+      return `
+        <tr class="${rowClass}">
+          <td style="font-weight:700; color:var(--text-bright);">${t.ticker}</td>
+          <td style="color:var(--text-dim); font-family:var(--sans); font-size:11px;">${t.date}</td>
+          <td style="color:${dirColor}; font-weight:600;">${t.direction === 'long' ? '▲' : '▼'}</td>
+          <td>${t.grade}</td>
+          <td>${t.entry.toFixed(2)}</td>
+          <td>${t.exitPrice.toFixed(2)}</td>
+          <td class="${t.pnlPerShare >= 0 ? 'up' : 'down'}">${pnlR}R</td>
+          <td>${outcomeLabel}</td>
+          <td style="font-size:11px; color:var(--text-dim);">${t.minutesSinceBreakout}min · ${t.priorFakeouts} fake · ${t.structureType === 'accumulation' ? 'accum.' : t.structureType === 'spike' ? 'spike' : '—'}</td>
+        </tr>
+      `;
+    }).join('');
+
+  els.resultsContainer.innerHTML = `
+    <div class="summary-grid">
+      <div class="summary-card">
+        <div class="summary-label">Trades détectés</div>
+        <div class="summary-value">${trades.length}</div>
+        <div class="summary-sub">${tickers.length} ticker${tickers.length > 1 ? 's' : ''} · ${dateFrom} → ${dateTo}</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">Winrate résolu</div>
+        <div class="summary-value" style="color:${resolved > 0 && wins / resolved > 0.33 ? 'var(--bull)' : 'var(--bear)'}">${winrate}%</div>
+        <div class="summary-sub">${wins} gagnés · ${losses} perdus · ${closedEod} clôturés fin de journée</div>
+      </div>
+      <div class="summary-card">
+        <div class="summary-label">PnL cumulé (en R)</div>
+        <div class="summary-value" style="color:${totalPnlR >= 0 ? 'var(--bull)' : 'var(--bear)'}">${totalPnlR >= 0 ? '+' : ''}${totalPnlR.toFixed(1)}R</div>
+        <div class="summary-sub">Somme des gains/pertes en multiples du risque initial</div>
+      </div>
     </div>
-    <div class="search-row">
-      <input type="text" id="ticker-input" placeholder="AAPL, TSLA..." maxlength="10">
-      <select id="orb-window" class="orb-select">
-        <option value="5">Range: 5 min</option>
-        <option value="15" selected>Range: 15 min</option>
-        <option value="30">Range: 30 min</option>
-      </select>
-      <button id="search-btn">Analyser</button>
-      <button id="history-btn" title="Voir l'historique des signaux">◷ Historique</button>
-      <a href="backtest.html" id="backtest-link" title="Backtester la stratégie sur l'historique">▤ Backtest</a>
+
+    ${gradeStats.length > 0 ? `
+      <div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:16px;">
+        Winrate par grade : ${gradeStats.map(g => `<strong style="color:var(--text-bright);">${g.grade}</strong>: ${g.winrate}% (${g.count})`).join(' · ')}
+      </div>
+    ` : ''}
+
+    ${errors.length > 0 ? `<div class="error-state" style="margin-bottom:16px;">Erreurs partielles :<br>${errors.map(escapeHtml).join('<br>')}</div>` : ''}
+
+    <div class="table-scroll">
+      <table class="results-table">
+        <thead>
+          <tr>
+            <th>Ticker</th><th>Date</th><th>Dir.</th><th>Grade</th><th>Entrée</th><th>Sortie</th><th>PnL</th><th>Résultat</th><th>Détail</th>
+          </tr>
+        </thead>
+        <tbody>${rows}</tbody>
+      </table>
     </div>
-  </header>
+  `;
+}
 
-  <div id="session-status-bar"></div>
-
-  <div id="balance-bar"></div>
-
-  <div class="watchlist-bar" id="watchlist-bar">
-    <!-- rempli dynamiquement par app.js -->
-  </div>
-
-  <div id="content">
-    <div class="empty-state">
-      <div class="glyph">‹ / ›</div>
-      <p>Ajoute des tickers à ta watchlist puis clique "Scanner tout" pour voir d'un coup d'œil lesquels ont un breakout ORB confirmé à l'ouverture.</p>
-      <div class="hint">Données intraday Yahoo Finance · 5 derniers jours · pas temps réel</div>
-    </div>
-  </div>
-
-  <footer>
-    Données fournies par Yahoo Finance (différées, usage informatif uniquement — pas un conseil en investissement).<br>
-    ORB Scanner est un outil d'aide à la lecture, pas un signal de trading automatisé.
-  </footer>
-</div>
-
-<script src="app.js"></script>
-</body>
-</html>
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str;
+  return div.innerHTML;
+}
