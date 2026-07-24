@@ -543,12 +543,15 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
   // instable seconde par seconde. Ici, plus le niveau tient depuis longtemps sans
   // retour dans le range, plus le score monte — cohérent avec l'idée qu'un breakout
   // qui dure est un signal plus fiable qu'un breakout qui vient tout juste d'apparaître.
-  let distanceTooFar = false; // renommé conceptuellement : "signal pas encore assez confirmé"
+  const MIN_MINUTES_FOR_TOP_GRADE = 10; // en dessous, plafond dur à B — voir plus bas
+  let notYetConfirmedByTime = false;
   if (!persistence) {
-    points += 2; details.push(`ℹ Pas encore assez de bougies closes depuis l'ouverture pour évaluer la tenue du niveau`);
-  } else if (persistence.minutesSinceBreakout < 5) {
-    points += 2; details.push(`~ Breakout très récent (${persistence.minutesSinceBreakout} min) — pas encore confirmé par la durée, prudence`);
-  } else if (persistence.minutesSinceBreakout < 15) {
+    points += 0; details.push(`ℹ Pas encore assez de bougies closes depuis l'ouverture pour évaluer la tenue du niveau`);
+    notYetConfirmedByTime = true;
+  } else if (persistence.minutesSinceBreakout < MIN_MINUTES_FOR_TOP_GRADE) {
+    points += 0; details.push(`✗ Breakout trop récent (${persistence.minutesSinceBreakout} min, minimum ${MIN_MINUTES_FOR_TOP_GRADE} min requis) — risque élevé de fakeout, pas encore confirmé par la durée`);
+    notYetConfirmedByTime = true;
+  } else if (persistence.minutesSinceBreakout < 20) {
     points += 4; details.push(`✓ Niveau tenu depuis ${persistence.minutesSinceBreakout} min sans retour dans le range`);
   } else {
     points += 6; details.push(`✓ Niveau tenu depuis ${persistence.minutesSinceBreakout} min — breakout confirmé par la durée`);
@@ -595,6 +598,18 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
   else if (pct >= 0.2) grade = 'D';
   else grade = 'E';
 
+  // Plafond dur : tant que le breakout n'a pas tenu au moins 10 minutes sans retour
+  // dans le range, le grade ne peut PAS dépasser B — peu importe un ADX ou un volume
+  // excellents. C'est directement la correction du problème observé en pratique : des
+  // breakouts notés A/S en quelques minutes qui se sont révélés être des fakeouts,
+  // parce que l'ADX/volume du moment ne suffisent pas à garantir qu'un breakout tient.
+  if (notYetConfirmedByTime) {
+    const gradeOrder = ['S', 'A', 'B', 'C', 'D', 'E'];
+    const currentIdx = gradeOrder.indexOf(grade);
+    const bIdx = gradeOrder.indexOf('B');
+    if (currentIdx < bIdx) grade = 'B';
+  }
+
   // Plafond : tant qu'aucun breakout n'est confirmé (signal encore neutre — jamais cassé
   // ou fakeout invalidé), le grade ne peut pas dépasser B — un bon contexte n'est qu'une
   // anticipation, pas un signal validé par un vrai franchissement qui tient.
@@ -605,7 +620,7 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
     if (currentIdx < bIdx) grade = 'B';
   }
 
-  return { grade, points, maxPoints, details, isNeutral, isLong, persistence };
+  return { grade, points, maxPoints, details, isNeutral, isLong, persistence, notYetConfirmedByTime };
 }
 
 function computeIndicators(data, orbMinutes) {
@@ -1242,8 +1257,11 @@ function renderSetupScore(a) {
     : 'Qualité de setup (ordre limite) — breakout confirmé';
 
   const detailsHtml = s.details.map(d => `<div style="padding:4px 0; font-size:12px; color:var(--text);">${escapeHtml(d)}</div>`).join('');
-  const persistenceBadge = (s.persistence && !s.isNeutral)
+  const persistenceBadge = (s.persistence && !s.isNeutral && !s.notYetConfirmedByTime)
     ? `<div style="font-size:11px; color:var(--vwap); font-family:var(--mono); margin-top:4px;">⏱ Niveau tenu depuis ${s.persistence.minutesSinceBreakout} min — le score se renforce si ça continue</div>`
+    : '';
+  const capBadge = (s.notYetConfirmedByTime && !s.isNeutral)
+    ? `<div style="font-size:11px; color:var(--warn); font-family:var(--mono); margin-top:4px;">⏳ Grade plafonné à B — breakout trop récent, attends qu'il tienne au moins 10 min avant d'agir</div>`
     : '';
 
   return `
@@ -1255,6 +1273,7 @@ function renderSetupScore(a) {
           <div style="font-size:13px; font-weight:600; color:var(--text-bright);">${gradeVerdict[s.grade]}</div>
           <div style="font-size:11px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;">${s.points}/${s.maxPoints} points — score de règles, pas une probabilité statistique</div>
           ${persistenceBadge}
+          ${capBadge}
         </div>
       </div>
       ${detailsHtml}
