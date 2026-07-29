@@ -168,6 +168,24 @@
 
   #backtest-link:hover { border-color: var(--warn); color: var(--text); }
 
+  #trend-link {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 13px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  #trend-link:hover { border-color: var(--vwap); color: var(--text); }
+
   /* Fenêtre de trading */
   .session-status {
     display: flex;
@@ -839,6 +857,7 @@
       <button id="search-btn">Analyser</button>
       <button id="history-btn" title="Voir l'historique des signaux">◷ Historique</button>
       <a href="backtest.html" id="backtest-link" title="Backtester la stratégie sur l'historique">▤ Backtest</a>
+      <a href="trend-following.html" id="trend-link" title="Stratégie Trend Following — allocation mensuelle">📈 Trend Following</a>
     </div>
   </header>
 
