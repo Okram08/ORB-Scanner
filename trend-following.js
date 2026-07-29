@@ -1,9 +1,9 @@
 // ============================================================
-// TREND FOLLOWING — signal mensuel S&P 500 (MM50/MM200 + ADX)
+// TREND FOLLOWING — signal mensuel Or (MM50/MM200 + ADX)
 // ============================================================
 
 const WORKER_URL = 'https://red-bush-d58eorbscanner.tom-vandendorpe.workers.dev/';
-const TICKER = '^GSPC'; // S&P 500 (indice). Alternative si Yahoo bloque les indices : 'SPY' (ETF)
+const TICKER = 'GC=F'; // Or (futures COMEX, sert de proxy fiable au prix spot sur Yahoo)
 const DEFAULT_MONTHLY_AMOUNT = 200;
 
 const HISTORY_KEY = 'trend-following-history';
@@ -47,7 +47,7 @@ async function fetchDailyData(ticker) {
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const data = await res.json();
   if (data?.chart?.error) throw new Error(data.chart.error.description || 'Erreur Yahoo');
-  if (!data?.chart?.result?.[0]) throw new Error('Réponse vide — le ticker ^GSPC est peut-être bloqué, réessaie ou contacte-moi pour basculer sur SPY');
+  if (!data?.chart?.result?.[0]) throw new Error('Réponse vide — réessaie dans un instant');
   return data;
 }
 
@@ -198,7 +198,7 @@ function renderSignal(a) {
 
   els.signalContainer.innerHTML = `
     <div class="signal-hero ${stateClass}">
-      <div class="signal-hero-label">Signal du mois — S&P 500</div>
+      <div class="signal-hero-label">Signal du mois — Or (Gold)</div>
       <div class="signal-hero-verdict">${a.verdict}</div>
       <div class="signal-hero-detail">Basé sur le croisement MM50/MM200 et l'ADX — détail complet ci-dessous.</div>
     </div>
@@ -371,7 +371,7 @@ function renderHistory() {
       Total investi : <strong style="color:var(--text-bright);">${totalInvested.toLocaleString('fr-BE')} €</strong> sur ${monthsInvested} mois actifs (${history.length} décision${history.length > 1 ? 's' : ''} au total)
     </div>
     <table class="history-table">
-      <thead><tr><th>Date</th><th>Décision</th><th>Prix S&P500</th><th>ADX</th><th>Montant</th></tr></thead>
+      <thead><tr><th>Date</th><th>Décision</th><th>Prix Or ($/oz)</th><th>ADX</th><th>Montant</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
