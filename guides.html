@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Guides des stratégies</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0A0B0D;
+    --bg-panel: #121316;
+    --bg-panel-raised: #17181C;
+    --border: #24262B;
+    --text: #C8C6C0;
+    --text-dim: #6B6D73;
+    --text-bright: #F0EEE8;
+    --bull: #4A9B7F;
+    --bull-dim: #2A4A3F;
+    --bear: #C4554A;
+    --bear-dim: #4A2C29;
+    --warn: #D4A24C;
+    --vwap: #7B8FA6;
+    --purple: #9B7FD4;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Inter', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; }
+  .app { max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand-mark { font-family: var(--mono); font-weight: 700; font-size: 20px; color: var(--text-bright); }
+  .brand-mark span { color: var(--text-dim); }
+  .brand-sub { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+  .back-link { font-size: 12px; color: var(--vwap); text-decoration: none; }
+  .back-link:hover { text-decoration: underline; }
+
+  .strategy-tabs {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 24px;
+    flex-wrap: wrap;
+  }
+
+  .strategy-tab {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 13px;
+    padding: 10px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .strategy-tab:hover { border-color: var(--text-dim); color: var(--text); }
+  .strategy-tab.active {
+    color: var(--bg);
+    font-weight: 700;
+  }
+
+  .strategy-tab .dot { width: 8px; height: 8px; border-radius: 50%; }
+
+  .guide-content {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 32px;
+  }
+
+  .guide-content h1 {
+    font-size: 22px;
+    color: var(--text-bright);
+    margin-bottom: 6px;
+    font-family: var(--sans);
+  }
+
+  .guide-content .guide-tagline {
+    font-size: 13px;
+    color: var(--text-dim);
+    margin-bottom: 24px;
+    font-family: var(--mono);
+  }
+
+  .guide-content h2 {
+    font-size: 16px;
+    color: var(--text-bright);
+    margin-top: 28px;
+    margin-bottom: 12px;
+    padding-bottom: 8px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .guide-content h2:first-of-type { margin-top: 0; }
+
+  .guide-content p {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    margin-bottom: 14px;
+  }
+
+  .guide-content strong { color: var(--text-bright); }
+
+  .guide-content ul {
+    margin: 0 0 14px 0;
+    padding-left: 20px;
+  }
+
+  .guide-content li {
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    margin-bottom: 6px;
+  }
+
+  .signal-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 18px;
+    font-size: 13px;
+  }
+
+  .signal-table th {
+    text-align: left;
+    padding: 10px 14px;
+    background: var(--bg-panel-raised);
+    color: var(--text-dim);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-weight: 600;
+  }
+
+  .signal-table td {
+    padding: 12px 14px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: top;
+  }
+
+  .signal-table tr:last-child td { border-bottom: none; }
+
+  .signal-cell {
+    font-family: var(--mono);
+    font-weight: 700;
+    white-space: nowrap;
+  }
+
+  .signal-buy { color: var(--bull); }
+  .signal-sell { color: var(--bear); }
+  .signal-wait { color: var(--text-dim); }
+  .signal-caution { color: var(--warn); }
+
+  .limit-box {
+    background: var(--bg-panel-raised);
+    border-left: 3px solid var(--warn);
+    border-radius: 6px;
+    padding: 14px 18px;
+    margin-top: 20px;
+    font-size: 13px;
+    color: var(--text-dim);
+    line-height: 1.6;
+  }
+
+  .limit-box strong { color: var(--warn); }
+
+  .link-to-tool {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-top: 20px;
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border);
+    color: var(--text-bright);
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 13px;
+    padding: 10px 16px;
+    border-radius: 6px;
+    text-decoration: none;
+  }
+  .link-to-tool:hover { border-color: var(--vwap); }
+
+  footer {
+    margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text-dim); font-family: var(--mono); text-align: center; line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <div class="brand-mark">GUIDES<span>·</span>STRATÉGIES</div>
+      <div class="brand-sub">fonctionnement et signaux de chaque stratégie</div>
+    </div>
+    <a href="index.html" class="back-link">← Retour au scanner ORB</a>
+  </header>
+
+  <div class="strategy-tabs" id="strategy-tabs"></div>
+
+  <div class="guide-content" id="guide-content"></div>
+
+  <footer>
+    Cette page se met à jour à chaque nouvelle stratégie ajoutée au site.
+  </footer>
+</div>
+
+<script src="guides-data.js"></script>
+<script src="guides.js"></script>
+</body>
+</html>
