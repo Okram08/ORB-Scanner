@@ -19,11 +19,89 @@ const RISK_PCT = 1; // % de la balance risqué par unité (2N stop = 1 "unit" de
 const els = {
   scanBtn: document.getElementById('scan-btn'),
   resultsContainer: document.getElementById('results-container'),
+  balanceBar: document.getElementById('balance-bar'),
 };
 
 els.scanBtn.addEventListener('click', runScan);
 
 let lastResults = [];
+
+// ------------------------------------------------------------
+// BALANCE & GESTION DU RISQUE — même mécanisme que le scanner ORB
+// ------------------------------------------------------------
+const BALANCE_KEY = 'turtle-balance';
+const RISK_PCT_KEY = 'turtle-risk-pct';
+const DEFAULT_RISK_PCT = 1;
+
+function loadBalance() {
+  try { const raw = localStorage.getItem(BALANCE_KEY); return raw ? parseFloat(raw) : null; } catch { return null; }
+}
+function saveBalance(v) { try { localStorage.setItem(BALANCE_KEY, String(v)); } catch {} }
+function loadRiskPct() {
+  try { const raw = localStorage.getItem(RISK_PCT_KEY); return raw ? parseFloat(raw) : DEFAULT_RISK_PCT; } catch { return DEFAULT_RISK_PCT; }
+}
+function saveRiskPct(v) { try { localStorage.setItem(RISK_PCT_KEY, String(v)); } catch {} }
+
+let userBalance = loadBalance();
+let riskPct = loadRiskPct();
+
+function renderBalanceBar() {
+  if (userBalance === null) {
+    els.balanceBar.innerHTML = `<div class="balance-bar"><span class="balance-label">Balance :</span><span class="balance-not-set" id="set-balance-link">renseigner ma balance pour calculer la taille de position optimale</span></div>`;
+    document.getElementById('set-balance-link').addEventListener('click', promptEditBalance);
+    return;
+  }
+  els.balanceBar.innerHTML = `
+    <div class="balance-bar">
+      <span class="balance-label">Balance :</span>
+      <span class="balance-value" id="balance-display">${userBalance.toLocaleString('fr-BE', { maximumFractionDigits: 0 })} $</span>
+      <span class="risk-pct">Risque par unité (2N) :</span>
+      <span class="risk-pct-value" id="risk-pct-display">${riskPct}%</span>
+    </div>`;
+  document.getElementById('balance-display').addEventListener('click', promptEditBalance);
+  document.getElementById('risk-pct-display').addEventListener('click', promptEditRiskPct);
+}
+
+function promptEditBalance() {
+  const input = prompt('Ta balance de trading actuelle ($) :', userBalance !== null ? userBalance : '');
+  if (input === null) return;
+  const value = parseFloat(input.replace(',', '.'));
+  if (isNaN(value) || value <= 0) { alert('Montant invalide.'); return; }
+  userBalance = value; saveBalance(value); renderBalanceBar();
+  if (lastResults.length > 0) renderGrid(lastResults, []); // recalcule l'affichage si un scan existe déjà
+}
+
+function promptEditRiskPct() {
+  const input = prompt('Pourcentage de la balance à risquer par unité (%) :', riskPct);
+  if (input === null) return;
+  const value = parseFloat(input.replace(',', '.'));
+  if (isNaN(value) || value <= 0 || value > 100) { alert('Pourcentage invalide.'); return; }
+  riskPct = value; saveRiskPct(value); renderBalanceBar();
+  if (lastResults.length > 0) renderGrid(lastResults, []);
+}
+
+renderBalanceBar();
+
+// Calcule le montant à investir pour respecter le risque défini, sur la base de la
+// distance du stop (2N) — même principe que le scanner ORB : jamais plus que la balance.
+function computePositionSize(entry, stop) {
+  if (userBalance === null) return null;
+  const riskAmount = userBalance * (riskPct / 100);
+  const stopDistance = Math.abs(entry - stop);
+  if (stopDistance <= 0) return null;
+
+  let shares = riskAmount / stopDistance;
+  let positionValue = shares * entry;
+
+  const balanceCapped = positionValue > userBalance;
+  if (balanceCapped) {
+    positionValue = userBalance;
+    shares = positionValue / entry;
+  }
+  const actualRiskAmount = shares * stopDistance;
+
+  return { shares, riskAmount: actualRiskAmount, targetRiskAmount: riskAmount, stopDistance, positionValue, balanceCapped };
+}
 
 // ------------------------------------------------------------
 // ORCHESTRATION
@@ -278,13 +356,23 @@ function renderDetail(r) {
     </div>
   `).join('');
 
+  const sizing = r.levels ? computePositionSize(r.levels.entry, r.levels.stop) : null;
+  const sizingHtml = r.levels ? renderSizingBlock(sizing) : '';
+
   const levelsHtml = r.levels ? `
     <div class="detail-panel">
       <div class="detail-title">Niveaux de trade (${r.signal === 'long' ? 'Long' : 'Short'} — Système ${r.levels.system})</div>
       <div class="reasoning-row"><span>Entrée</span><span style="margin-left:auto; font-family:var(--mono); font-weight:700;">${r.levels.entry.toFixed(4)}</span></div>
-      <div class="reasoning-row"><span>Stop-loss (2N)</span><span style="margin-left:auto; font-family:var(--mono); font-weight:700; color:var(--bear);">${r.levels.stop.toFixed(4)}</span></div>
-      <div class="reasoning-row"><span>Sortie de tendance (Donchian ${r.levels.exitPeriod}j inverse)</span><span style="margin-left:auto; font-family:var(--mono); font-weight:700; color:var(--warn);">${r.levels.trendExitLevel.toFixed(4)}</span></div>
-      <div class="reasoning-row" style="border-bottom:none;"><span style="font-size:11px; color:var(--text-dim);">Règle Turtle originale : sors sur LE PREMIER des deux niveaux touché — stop 2N si le trade tourne mal rapidement, ou sortie de tendance si le mouvement s'essouffle après avoir été gagnant. Pas de take-profit fixe : la philosophie Turtle laisse courir les gagnants jusqu'à un vrai signal de retournement.</span></div>
+      <div class="reasoning-row"><span>Stop-loss (2N) — FIXE, ne bouge pas</span><span style="margin-left:auto; font-family:var(--mono); font-weight:700; color:var(--bear);">${r.levels.stop.toFixed(4)}</span></div>
+      <div class="reasoning-row"><span>Sortie de tendance actuelle (Donchian ${r.levels.exitPeriod}j inverse)</span><span style="margin-left:auto; font-family:var(--mono); font-weight:700; color:var(--warn);">${r.levels.trendExitLevel.toFixed(4)}</span></div>
+      ${sizingHtml}
+      <div class="exit-tracker-note">
+        <strong>⚠ Comment sortir de ce trade — pas de TP fixe :</strong><br>
+        Ce système n'a volontairement <strong>aucun take-profit fixe</strong>. Tu sors sur le PREMIER des deux niveaux touché :<br>
+        1) le <strong>stop 2N ci-dessus, qui est fixe</strong> une fois le trade pris — pose-le tel quel chez ton broker et ne le bouge pas ;<br>
+        2) la <strong>« sortie de tendance »</strong> — qui elle <strong>change chaque jour</strong> car elle suit le canal Donchian inverse. Tant que le trade reste ouvert, reviens sur cette page pour rescanner et voir où ce niveau se trouve désormais.<br>
+        Concrètement : le trade reste ouvert tant qu'aucun des deux niveaux n'est touché, potentiellement plusieurs semaines — c'est la philosophie Turtle : laisser courir les gagnants.
+      </div>
     </div>
   ` : '';
 
@@ -300,6 +388,20 @@ function renderDetail(r) {
 
   document.getElementById('back-to-grid-btn').addEventListener('click', () => renderGrid(lastResults, []));
   renderDetailChart(r);
+}
+
+function renderSizingBlock(sizing) {
+  if (!sizing) {
+    return `<div class="position-size-row"><span class="label">Montant à investir</span><span class="value" style="color:var(--text-dim); font-weight:400;">renseigne ta balance en haut de page</span></div>`;
+  }
+  if (sizing.balanceCapped) {
+    const actualRiskPct = (sizing.riskAmount / userBalance) * 100;
+    return `<div class="position-size-row" style="flex-direction:column; align-items:stretch; gap:4px;">
+      <div style="display:flex; justify-content:space-between;"><span class="label">Montant à investir</span><span class="value">${sizing.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$ <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(= toute ta balance)</span></span></div>
+      <div style="font-size:11px; color:var(--warn); font-family:var(--sans);">⚠ Stop trop large (2N) pour respecter ${riskPct}% avec cette balance — risque réel ~${actualRiskPct.toFixed(1)}% (${sizing.riskAmount.toFixed(2)}$) si tout le capital est engagé</div>
+    </div>`;
+  }
+  return `<div class="position-size-row"><span class="label">Montant à investir (${riskPct}% risqué)</span><span class="value">${sizing.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$ <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(${sizing.shares.toFixed(4)} unités · ~${sizing.riskAmount.toFixed(2)}$ risqués si stop 2N touché)</span></span></div>`;
 }
 
 function renderDetailChart(r) {
