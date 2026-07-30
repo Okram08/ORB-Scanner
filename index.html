@@ -204,6 +204,24 @@
 
   #behavioral-link:hover { border-color: #9B7FD4; color: var(--text); }
 
+  #guides-link {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-weight: 600;
+    font-size: 13px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    text-decoration: none;
+    display: inline-flex;
+    align-items: center;
+  }
+
+  #guides-link:hover { border-color: var(--text-bright); color: var(--text-bright); }
+
   /* Fenêtre de trading */
   .session-status {
     display: flex;
@@ -877,6 +895,7 @@
       <a href="backtest.html" id="backtest-link" title="Backtester la stratégie sur l'historique">▤ Backtest</a>
       <a href="trend-following.html" id="trend-link" title="Stratégie Trend Following — allocation mensuelle">📈 Trend Following</a>
       <a href="behavioral-extremes.html" id="behavioral-link" title="Behavioral Extremes — détection de sur-réactions crypto">◈ Behavioral</a>
+      <a href="guides.html" id="guides-link" title="Guides des stratégies — fonctionnement et signaux">📖 Guides</a>
     </div>
   </header>
 
