@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Behavioral Extremes — Crowd Reversion Scanner</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<script src="https://cdn.jsdelivr.net/npm/lightweight-charts@4.1.3/dist/lightweight-charts.standalone.production.js"></script>
+<style>
+  :root {
+    --bg: #0A0B0D;
+    --bg-panel: #121316;
+    --bg-panel-raised: #17181C;
+    --border: #24262B;
+    --text: #C8C6C0;
+    --text-dim: #6B6D73;
+    --text-bright: #F0EEE8;
+    --bull: #4A9B7F;
+    --bull-dim: #2A4A3F;
+    --bear: #C4554A;
+    --bear-dim: #4A2C29;
+    --warn: #D4A24C;
+    --purple: #9B7FD4;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Inter', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; }
+  .app { max-width: 1300px; margin: 0 auto; padding: 24px; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand-mark { font-family: var(--mono); font-weight: 700; font-size: 20px; color: var(--text-bright); }
+  .brand-mark span { color: var(--purple); }
+  .brand-sub { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+  .back-link { font-size: 12px; color: var(--purple); text-decoration: none; }
+  .back-link:hover { text-decoration: underline; }
+
+  .disclaimer-banner {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-left: 3px solid var(--purple);
+    border-radius: 6px;
+    padding: 14px 18px;
+    font-size: 12px;
+    color: var(--text-dim);
+    line-height: 1.6;
+    margin-bottom: 24px;
+  }
+
+  .controls-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+    margin-bottom: 20px;
+    flex-wrap: wrap;
+  }
+
+  #scan-btn {
+    background: var(--purple);
+    border: 1px solid var(--purple);
+    color: #0A0B0D;
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 13px;
+    padding: 10px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  #scan-btn:hover { opacity: 0.9; }
+  #scan-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  .universe-label { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+
+  #results-container { min-height: 200px; }
+
+  .empty-state {
+    text-align: center; padding: 80px 20px; color: var(--text-dim);
+  }
+  .empty-state .glyph { font-family: var(--mono); font-size: 36px; color: var(--border); margin-bottom: 16px; }
+  .empty-state p { font-size: 14px; max-width: 480px; margin: 0 auto; line-height: 1.6; }
+
+  .error-state {
+    padding: 20px; color: var(--bear); font-family: var(--mono); font-size: 13px;
+    background: var(--bg-panel); border: 1px solid var(--bear-dim); border-radius: 8px;
+  }
+
+  .asset-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 16px;
+    margin-bottom: 24px;
+  }
+
+  .asset-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 18px;
+    cursor: pointer;
+    transition: border-color 0.15s ease;
+  }
+
+  .asset-card:hover { border-color: var(--purple); }
+  .asset-card.setup-long { border-color: var(--bull); background: rgba(74,155,127,0.06); }
+  .asset-card.setup-short { border-color: var(--bear); background: rgba(196,85,74,0.06); }
+
+  .asset-card-header {
+    display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 12px;
+  }
+
+  .asset-ticker { font-family: var(--mono); font-weight: 700; font-size: 16px; color: var(--text-bright); }
+  .asset-price { font-family: var(--mono); font-size: 13px; color: var(--text-dim); }
+
+  .setup-badge {
+    display: inline-block;
+    font-size: 11px;
+    font-family: var(--mono);
+    font-weight: 700;
+    padding: 4px 10px;
+    border-radius: 12px;
+    margin-bottom: 10px;
+  }
+  .badge-long { background: var(--bull-dim); color: var(--bull); }
+  .badge-short { background: var(--bear-dim); color: var(--bear); }
+  .badge-none { background: var(--bg-panel-raised); color: var(--text-dim); }
+
+  .score-bar-track {
+    width: 100%; height: 6px; background: var(--bg-panel-raised); border-radius: 3px; overflow: hidden; margin-bottom: 10px;
+  }
+  .score-bar-fill { height: 100%; border-radius: 3px; background: var(--purple); }
+
+  .asset-metrics {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--text-dim);
+  }
+
+  .asset-metrics .metric-val { color: var(--text); font-weight: 600; }
+
+  #chart-container {
+    width: 100%; height: 380px;
+    background: var(--bg-panel); border: 1px solid var(--border); border-radius: 8px;
+    margin-bottom: 12px; padding: 12px;
+  }
+
+  .chart-legend {
+    display: flex; gap: 18px; padding: 8px 4px 20px; font-family: var(--mono); font-size: 11px; color: var(--text-dim);
+  }
+  .legend-item { display: flex; align-items: center; gap: 6px; }
+  .legend-swatch { width: 10px; height: 3px; border-radius: 2px; }
+
+  .detail-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 24px;
+  }
+
+  .detail-title { font-size: 14px; font-weight: 700; color: var(--text-bright); margin-bottom: 14px; }
+
+  .reasoning-row {
+    display: flex; align-items: flex-start; gap: 10px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px;
+  }
+  .reasoning-row:last-child { border-bottom: none; }
+  .reasoning-icon { flex-shrink: 0; font-weight: 700; width: 18px; }
+  .icon-good { color: var(--bull); }
+  .icon-bad { color: var(--bear); }
+  .icon-warn { color: var(--warn); }
+  .icon-neutral { color: var(--text-dim); }
+
+  .back-to-grid {
+    background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+    font-family: var(--sans); font-size: 12px; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-bottom: 16px;
+  }
+  .back-to-grid:hover { border-color: var(--purple); color: var(--text); }
+
+  footer {
+    margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text-dim); font-family: var(--mono); text-align: center; line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <div class="brand-mark">BEHAVIORAL<span>·</span>EXTREMES</div>
+      <div class="brand-sub">détection de sur-réactions · crypto liquide</div>
+    </div>
+    <a href="index.html" class="back-link">← Retour au scanner ORB</a>
+  </header>
+
+  <div class="disclaimer-banner">
+    Stratégie distincte de l'ORB et du Trend Following — cherche des sur-réactions émotionnelles (euphorie/panique) sur crypto liquide, pas la valeur intrinsèque de l'actif. Le "sentiment" est approximé uniquement par des proxys quantitatifs (extension de prix, volume, volatilité, ralentissement du momentum) — aucune vraie analyse de réseaux sociaux ou NLP. Stratégie sélective par nature : l'absence de setup est le résultat normal la plupart du temps, pas un problème.
+  </div>
+
+  <div class="controls-row">
+    <button id="scan-btn">Scanner l'univers crypto</button>
+    <span class="universe-label">BTC · ETH · SOL · XRP · DOGE</span>
+  </div>
+
+  <div id="results-container">
+    <div class="empty-state">
+      <div class="glyph">◈</div>
+      <p>Clique "Scanner l'univers crypto" pour détecter des situations de sur-réaction (extension de prix extrême + volume anormal + ralentissement du momentum) sur un panier de cryptos liquides et narratives.</p>
+    </div>
+  </div>
+
+  <footer>
+    Données Yahoo Finance (BTC-USD, ETH-USD, SOL-USD, XRP-USD, DOGE-USD) via ton Worker Cloudflare existant, intervalle horaire.<br>
+    Stratégie contrarian par nature — cherche l'épuisement d'un mouvement de foule, pas sa continuation. Reste sélective : peu de signaux, mais avec conviction.
+  </footer>
+</div>
+
+<script src="behavioral-extremes.js"></script>
+</body>
+</html>
