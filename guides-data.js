@@ -176,4 +176,61 @@ const STRATEGY_GUIDES = [
     ],
     limitBox: "Sans vraie analyse de sentiment social, l'outil ne capture qu'une approximation de la « psychologie de foule » via ce que le prix et le volume laissent deviner. Ça peut rater de vrais excès sentimentaux qui ne se traduisent pas encore en prix/volume, et inversement.",
   },
+
+  {
+    id: 'turtle-trading',
+    name: 'Turtle Trading',
+    color: '#5FA8A0',
+    toolLink: 'turtle-trading.html',
+    toolLinkLabel: 'Ouvrir Turtle Trading',
+    tagline: 'Long terme · Multi-marchés · Donchian breakout (1983)',
+    sections: [
+      {
+        heading: 'Principe',
+        paragraphs: [
+          "Stratégie historique créée par Richard Dennis et William Eckhardt en 1983 : un système de trend following 100% mécanique, sans prédiction — <strong>« la tendance est ton amie »</strong>. On achète la force, on vend la faiblesse, et on laisse courir les gagnants jusqu'à un vrai signal de retournement. C'est l'expérience qui a prouvé qu'un système de trading peut être enseigné à des débutants avec des règles strictes.",
+          "C'est une stratégie <strong>long terme</strong> (semaines à mois), appliquée en parallèle sur plusieurs marchés — l'esprit original tradait matières premières, devises, obligations et indices simultanément, pas un seul actif.",
+        ],
+      },
+      {
+        heading: 'Le canal Donchian',
+        paragraphs: [
+          "Le signal d'entrée repose sur le canal Donchian — le plus haut et le plus bas des N derniers jours. Deux systèmes tournent en parallèle :",
+        ],
+        list: [
+          '<strong>Système 1 (20 jours)</strong> : entrée sur cassure du plus haut/bas des 20 derniers jours — mais le signal est <strong>ignoré</strong> si le breakout précédent dans le même sens était déjà gagnant (règle anti-faux-signaux)',
+          '<strong>Système 2 (55 jours)</strong> : entrée sur cassure à 55 jours, toujours suivi sans exception — sert de filet si le Système 1 est filtré',
+        ],
+      },
+      {
+        heading: 'Les signaux',
+        signalTable: [
+          { signal: '▲ LONG (Système 1 ou 2)', cls: 'signal-buy', meaning: 'Cassure du plus haut sur 20j (ou 55j)', action: 'Envisager un LONG' },
+          { signal: '▼ SHORT (Système 1 ou 2)', cls: 'signal-sell', meaning: 'Cassure du plus bas sur 20j (ou 55j)', action: 'Envisager un SHORT' },
+          { signal: 'Pas de cassure', cls: 'signal-wait', meaning: 'Prix encore dans le canal', action: 'Ne rien faire' },
+        ],
+      },
+      {
+        heading: 'N — la mesure de volatilité (ATR)',
+        paragraphs: [
+          "N (l'ATR sur 20 jours) est le cœur du système : il sert à la fois au stop-loss et au dimensionnement de position, pour que le risque soit toujours comparable en % du portefeuille peu importe la volatilité propre de chaque marché.",
+        ],
+      },
+      {
+        heading: 'Sortie — pas de take-profit fixe',
+        paragraphs: [
+          "Contrairement à l'ORB ou Behavioral Extremes, Turtle Trading <strong>n'a pas de take-profit fixe</strong>. La sortie se fait sur le PREMIER des deux niveaux touchés :",
+        ],
+        list: [
+          '<strong>Stop-loss à 2N</strong> : si le trade tourne mal rapidement',
+          '<strong>Sortie de tendance</strong> (cassure Donchian inverse à 10j pour le Système 1, 20j pour le Système 2) : si le mouvement s\'essouffle après avoir été gagnant',
+        ],
+      },
+      {
+        heading: 'Philosophie de sortie',
+        paragraphs: ["Laisser courir les gagnants aussi longtemps que la tendance tient, quitte à rendre une partie des gains avant que le signal de sortie ne se déclenche."],
+      },
+    ],
+    limitBox: "Le système accepte de nombreuses petites pertes (marché en range, faux signaux) — c'est structurel, pas un défaut. Sa rentabilité vient de rares mais grands gagnants qui compensent largement les pertes fréquentes. La discipline (suivre toutes les règles sans exception) compte plus que la qualité perçue d'un signal individuel.",
+  },
 ];
