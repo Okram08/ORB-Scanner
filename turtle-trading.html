@@ -58,6 +58,47 @@
 
   .universe-label { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
 
+  .balance-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 16px;
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    margin-bottom: 16px;
+    font-family: var(--mono);
+    font-size: 13px;
+    flex-wrap: wrap;
+  }
+
+  .balance-bar .balance-label { color: var(--text-dim); font-family: var(--sans); font-size: 12px; }
+  .balance-bar .balance-value { font-weight: 700; color: var(--text-bright); cursor: pointer; padding: 4px 10px; border-radius: 4px; border: 1px solid transparent; }
+  .balance-bar .balance-value:hover { border-color: var(--turtle); }
+  .balance-bar .risk-pct { color: var(--text-dim); font-family: var(--sans); font-size: 12px; margin-left: 8px; }
+  .balance-bar .risk-pct-value { color: var(--warn); font-weight: 700; font-family: var(--mono); cursor: pointer; }
+  .balance-not-set { color: var(--text-dim); font-family: var(--sans); font-size: 12px; cursor: pointer; text-decoration: underline; }
+
+  .position-size-row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    padding: 8px 0; margin-top: 6px; border-top: 1px dashed var(--border);
+    font-family: var(--mono); font-size: 13px;
+  }
+  .position-size-row .label { color: var(--text-dim); font-family: var(--sans); font-size: 12px; }
+  .position-size-row .value { font-weight: 700; color: var(--turtle); }
+
+  .exit-tracker-note {
+    background: rgba(212,162,76,0.08);
+    border: 1px solid var(--warn);
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-size: 12px;
+    color: var(--text);
+    line-height: 1.6;
+    margin-top: 12px;
+  }
+  .exit-tracker-note strong { color: var(--warn); }
+
   #results-container { min-height: 200px; }
 
   .empty-state { text-align: center; padding: 80px 20px; color: var(--text-dim); }
@@ -145,6 +186,8 @@
   <div class="disclaimer-banner">
     Stratégie historique de Richard Dennis &amp; William Eckhardt (1983) — trend following mécanique pur, sans prédiction. Entrée sur cassure de canal Donchian (20 jours = Système 1, 55 jours = Système 2), sortie sur cassure inverse, stop et taille de position basés sur l'ATR (volatilité). Appliqué ici à un panier multi-actifs (indices, matières premières, devises, obligations) pour respecter l'esprit diversifié de la stratégie originale. Horizon long terme (semaines à mois), pas intraday.
   </div>
+
+  <div id="balance-bar"></div>
 
   <div class="controls-row">
     <button id="scan-btn">Scanner les marchés</button>
