@@ -233,4 +233,65 @@ const STRATEGY_GUIDES = [
     ],
     limitBox: "Le système accepte de nombreuses petites pertes (marché en range, faux signaux) — c'est structurel, pas un défaut. Sa rentabilité vient de rares mais grands gagnants qui compensent largement les pertes fréquentes. La discipline (suivre toutes les règles sans exception) compte plus que la qualité perçue d'un signal individuel.",
   },
+
+  {
+    id: 'london-breakout',
+    name: 'London Breakout',
+    color: '#6B8CBE',
+    toolLink: 'london-breakout.html',
+    toolLinkLabel: 'Ouvrir London Breakout',
+    tagline: 'Day trading · EUR/USD · Session Londres',
+    sections: [
+      {
+        heading: 'Principe',
+        paragraphs: [
+          "La session asiatique (00h–08h GMT) est structurellement calme sur EUR/USD — les gros acteurs européens et américains sont hors ligne, donc le prix compresse dans un range étroit par faible participation. L'ouverture de Londres (qui concentre à elle seule environ 38% du volume mondial de change) fait souvent exploser ce range avec conviction dès son ouverture.",
+          "C'est une stratégie de <strong>day trading</strong> — horizon max 24h, pas une position tenue plusieurs jours.",
+        ],
+      },
+      {
+        heading: "L'espérance mathématique, pas le taux de réussite",
+        paragraphs: [
+          "Un point important : cette stratégie ne vise <strong>pas</strong> un taux de réussite élevé. Un calcul documenté sur cette approche donne un winrate autour de 41.5%, compensé par un ratio risque/reward de 2:1 — l'espérance mathématique reste positive malgré une majorité de trades perdants, exactement comme pour l'ORB.",
+        ],
+      },
+      {
+        heading: 'Les signaux',
+        signalTable: [
+          { signal: '▲ BREAKOUT HAUSSIER', cls: 'signal-buy', meaning: "Cassure de l'Asian High confirmée par clôture + impulsion", action: 'Envisager un LONG' },
+          { signal: '▼ BREAKOUT BAISSIER', cls: 'signal-sell', meaning: "Cassure de l'Asian Low confirmée par clôture + impulsion", action: 'Envisager un SHORT' },
+          { signal: '— PAS DE SIGNAL', cls: 'signal-wait', meaning: 'Pas de cassure, ou cassure invalidée (fakeout)', action: 'Ne rien faire' },
+        ],
+      },
+      {
+        heading: 'Le filtre de compression',
+        paragraphs: [
+          "Le critère central : le range asiatique doit être <strong>compressé</strong> (inférieur à 35% de l'ATR14 journalier) avant la cassure. Un range déjà large avant l'ouverture de Londres n'a pas le même potentiel d'expansion — l'edge documenté repose spécifiquement sur le pattern « compression puis explosion ».",
+        ],
+      },
+      {
+        heading: 'Anti-fakeout',
+        paragraphs: [
+          "Deux filtres se cumulent pour éviter les faux signaux : la cassure doit être confirmée par une <strong>clôture</strong> de bougie hors du range (pas juste une mèche), et la bougie de cassure doit avoir un <strong>corps significatif</strong> (au moins 50% du range de la bougie) — un signe d'impulsion réelle plutôt qu'un simple dépassement passager.",
+        ],
+      },
+      {
+        heading: 'Fenêtre de trading',
+        list: [
+          '<strong>00h–07h GMT</strong> : le range asiatique se forme, pas de signal encore',
+          '<strong>07h–12h GMT</strong> : fenêtre utile, tu analyses et agis si un signal net apparaît',
+          "<strong>Après 12h GMT</strong> : l'edge du breakout matinal s'estompe",
+        ],
+      },
+      {
+        heading: 'Gestion du risque',
+        list: [
+          "Stop-loss : opposé du range asiatique, plafonné à 1.5× ATR",
+          'Take-profit : ratio 2:1',
+          'Position non résolue après 24h : clôture manuelle recommandée',
+        ],
+      },
+    ],
+    limitBox: "Le volume forex n'étant pas fiable sur Yahoo Finance, ce score ne peut pas s'appuyer sur le volume comme les autres stratégies — il repose uniquement sur la compression du range, l'ADX, et la qualité structurelle de la cassure. Les seuils (35% de compression, 50% de corps de bougie) sont des valeurs de départ raisonnables, pas des paramètres optimisés sur un vrai historique massif — à affiner avec ton propre suivi.",
+  },
 ];
