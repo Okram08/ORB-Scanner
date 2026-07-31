@@ -255,7 +255,7 @@ function analyzeAsset(asset, data) {
 
   details.push({ icon: 'neutral', text: `N (ATR 20j, mesure de volatilité) = ${N.toFixed(2)} — sert au stop et au dimensionnement` });
 
-  // --- Niveaux de risque, règles Turtle originales ---
+  // --- Niveaux de risque, règles Turtle originales (pour un NOUVEAU trade aujourd'hui) ---
   let levels = null;
   if (signal !== 'none') {
     const entry = lastClose;
@@ -268,9 +268,33 @@ function analyzeAsset(asset, data) {
     levels = { entry, stop, stopDistance, N, trendExitLevel, exitPeriod, system };
   }
 
+  // --- Suivi de position ouverte (INDÉPENDANT du signal du jour) ---
+  // Si tu es déjà en position sur cet actif (peu importe si un nouveau signal d'entrée
+  // existe aujourd'hui), ce bloc te dit si le niveau de sortie de tendance vient d'être
+  // franchi — c'est la vraie règle de sortie Turtle, pas l'absence de nouveau signal.
+  const exitLong10 = donchianLow(lows, 10, n - 1);
+  const exitLong20 = donchianLow(lows, 20, n - 1);
+  const exitShort10 = donchianHigh(highs, 10, n - 1);
+  const exitShort20 = donchianHigh(highs, 20, n - 1);
+
+  const positionTracker = {
+    long: {
+      sys1ExitLevel: exitLong10,
+      sys1Triggered: lastClose <= exitLong10,
+      sys2ExitLevel: exitLong20,
+      sys2Triggered: lastClose <= exitLong20,
+    },
+    short: {
+      sys1ExitLevel: exitShort10,
+      sys1Triggered: lastClose >= exitShort10,
+      sys2ExitLevel: exitShort20,
+      sys2Triggered: lastClose >= exitShort20,
+    },
+  };
+
   return {
     ticker: asset.ticker, name: asset.name, assetClass: asset.class,
-    lastClose, signal, system, N, details, levels, data,
+    lastClose, signal, system, N, details, levels, data, positionTracker,
   };
 }
 
@@ -376,6 +400,8 @@ function renderDetail(r) {
     </div>
   ` : '';
 
+  const positionTrackerHtml = renderPositionTracker(r);
+
   els.resultsContainer.innerHTML = `
     <button class="back-to-grid" id="back-to-grid-btn">← Retour à la grille</button>
     <div class="detail-panel">
@@ -383,6 +409,7 @@ function renderDetail(r) {
       ${detailsHtml}
     </div>
     ${levelsHtml}
+    ${positionTrackerHtml}
     <div id="chart-container"></div>
   `;
 
@@ -402,6 +429,39 @@ function renderSizingBlock(sizing) {
     </div>`;
   }
   return `<div class="position-size-row"><span class="label">Montant à investir (${riskPct}% risqué)</span><span class="value">${sizing.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$ <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(${sizing.shares.toFixed(4)} unités · ~${sizing.riskAmount.toFixed(2)}$ risqués si stop 2N touché)</span></span></div>`;
+}
+
+function renderPositionTracker(r) {
+  const pt = r.positionTracker;
+
+  const renderSide = (direction, label) => {
+    const t = pt[direction];
+    const sys1Status = t.sys1Triggered
+      ? `<span style="color:var(--bear); font-weight:700;">⚠ FRANCHI — sors si tu es en position (Système 1)</span>`
+      : `<span style="color:var(--bull);">Pas encore franchi</span>`;
+    const sys2Status = t.sys2Triggered
+      ? `<span style="color:var(--bear); font-weight:700;">⚠ FRANCHI — sors si tu es en position (Système 2)</span>`
+      : `<span style="color:var(--bull);">Pas encore franchi</span>`;
+
+    return `
+      <div style="margin-bottom:14px;">
+        <div style="font-family:var(--mono); font-weight:700; font-size:12px; color:var(--text-bright); margin-bottom:6px;">${label}</div>
+        <div class="reasoning-row"><span>Sortie 10j (Système 1) : ${t.sys1ExitLevel.toFixed(4)}</span><span style="margin-left:auto;">${sys1Status}</span></div>
+        <div class="reasoning-row" style="border-bottom:none;"><span>Sortie 20j (Système 2) : ${t.sys2ExitLevel.toFixed(4)}</span><span style="margin-left:auto;">${sys2Status}</span></div>
+      </div>
+    `;
+  };
+
+  return `
+    <div class="detail-panel">
+      <div class="detail-title">📍 Suivi de position ouverte — si tu es déjà en position sur ${r.name}</div>
+      <p style="font-size:12px; color:var(--text-dim); margin-bottom:14px; line-height:1.6;">
+        Ce bloc est indépendant du signal du jour ci-dessus — il te dit, pour chaque direction possible, si le niveau de sortie de tendance a déjà été franchi par le prix actuel (${r.lastClose.toFixed(4)}). Utilise la ligne qui correspond à ta position réelle et au système que tu suivais à l'entrée.
+      </p>
+      ${renderSide('long', '▲ Si tu es LONG')}
+      ${renderSide('short', '▼ Si tu es SHORT')}
+    </div>
+  `;
 }
 
 function renderDetailChart(r) {
