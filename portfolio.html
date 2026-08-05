@@ -274,6 +274,166 @@
     font-size: 13px;
   }
 
+  /* Balance management */
+  .balance-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-top: 20px;
+  }
+
+  .balance-panel-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-bright);
+    margin-bottom: 6px;
+  }
+
+  .balance-panel-sub {
+    font-size: 12px;
+    color: var(--text-dim);
+    margin-bottom: 18px;
+    line-height: 1.5;
+  }
+
+  .balance-form-row {
+    display: flex;
+    gap: 10px;
+    align-items: flex-end;
+    flex-wrap: wrap;
+    margin-bottom: 18px;
+  }
+
+  .balance-form-field { display: flex; flex-direction: column; gap: 6px; }
+  .balance-form-field label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .balance-form-field input, .balance-form-field select {
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border);
+    color: var(--text-bright);
+    font-family: var(--mono);
+    font-size: 13px;
+    padding: 8px 10px;
+    border-radius: 6px;
+  }
+  .balance-form-field input:focus, .balance-form-field select:focus { outline: none; border-color: var(--bull); }
+
+  #bm-amount { width: 110px; }
+  #bm-date { width: 150px; }
+
+  .balance-add-btn {
+    background: var(--bull-dim);
+    border: 1px solid var(--bull);
+    color: var(--bull);
+    font-family: var(--sans);
+    font-weight: 700;
+    font-size: 13px;
+    padding: 9px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .balance-add-btn:hover { background: var(--bull); color: var(--bg); }
+
+  .balance-movements-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 10px;
+  }
+
+  .balance-movements-table th {
+    text-align: left;
+    font-size: 11px;
+    text-transform: uppercase;
+    color: var(--text-dim);
+    font-weight: 600;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .balance-movements-table td {
+    padding: 8px 10px;
+    font-family: var(--mono);
+    font-size: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .balance-movements-table tr:last-child td { border-bottom: none; }
+
+  .balance-remove-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 11px;
+    padding: 3px 8px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  .balance-remove-btn:hover { border-color: var(--bear); color: var(--bear); }
+
+  .balance-empty-hint {
+    font-size: 12px;
+    color: var(--text-dim);
+    padding: 10px 0;
+  }
+
+  /* ETF comparison chart */
+  .compare-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+    margin-top: 20px;
+  }
+
+  .compare-panel-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    flex-wrap: wrap;
+    gap: 12px;
+  }
+
+  .compare-legend {
+    display: flex;
+    gap: 16px;
+    font-family: var(--mono);
+    font-size: 12px;
+    flex-wrap: wrap;
+  }
+
+  .compare-legend-item { display: flex; align-items: center; gap: 6px; }
+  .compare-legend-swatch { width: 10px; height: 3px; border-radius: 2px; }
+
+  .compare-refresh-btn {
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 8px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .compare-refresh-btn:hover { border-color: var(--bull); }
+  .compare-refresh-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+  #compare-chart-container { width: 100%; height: 320px; }
+
+  .compare-summary-row {
+    display: flex;
+    gap: 20px;
+    margin-top: 16px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+    flex-wrap: wrap;
+  }
+
+  .compare-summary-item { font-family: var(--mono); font-size: 13px; }
+  .compare-summary-item .label { color: var(--text-dim); font-family: var(--sans); font-size: 11px; display: block; margin-bottom: 4px; }
+
   .day-detail-panel {
     background: var(--bg-panel);
     border: 1px solid var(--border);
@@ -345,8 +505,13 @@
 
   <div id="chart-panel-container"></div>
 
+  <div id="balance-panel-container"></div>
+
+  <div id="compare-panel-container"></div>
+
   <footer>
-    Basé sur ton journal de suivi ORB (localStorage) — trades avec PnL calculé uniquement.
+    Basé sur ton journal de suivi ORB (localStorage) — trades avec PnL calculé uniquement.<br>
+    Comparaison ETF : VWCE.DE (Vanguard FTSE All-World) et QQQ (Nasdaq 100) via Yahoo Finance.
   </footer>
 </div>
 
