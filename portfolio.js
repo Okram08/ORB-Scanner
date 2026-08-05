@@ -3,6 +3,10 @@
 // ============================================================
 
 const HISTORY_KEY = 'orb-scanner-history'; // même clé que le journal ORB (app.js)
+const BALANCE_MOVEMENTS_KEY = 'orb-portfolio-balance-movements';
+const WORKER_URL = 'https://red-bush-d58eorbscanner.tom-vandendorpe.workers.dev/';
+const ETF_WORLD_TICKER = 'VWCE.DE';   // Vanguard FTSE All-World — le même ETF que le DCA existant
+const ETF_NASDAQ_TICKER = 'QQQ';       // Nasdaq 100 — le plus liquide/suivi sur Yahoo
 
 const TIMEFRAMES = [
   { id: '24H', label: '24h' },
@@ -18,6 +22,8 @@ const els = {
   calendarContainer: document.getElementById('calendar-container'),
   dayDetailContainer: document.getElementById('day-detail-container'),
   chartPanelContainer: document.getElementById('chart-panel-container'),
+  balancePanelContainer: document.getElementById('balance-panel-container'),
+  comparePanelContainer: document.getElementById('compare-panel-container'),
 };
 
 let currentMonth = new Date().getMonth(); // 0-11
@@ -25,14 +31,19 @@ let currentYear = new Date().getFullYear();
 let allTrades = [];
 let currentTimeframe = '1M';
 let pnlChart = null;
+let compareChart = null;
+let balanceMovements = [];
 
 init();
 
 function init() {
   allTrades = loadHistory();
+  balanceMovements = loadBalanceMovements();
   renderSummary();
   renderCalendar();
   renderChartPanel();
+  renderBalancePanel();
+  renderComparePanel();
 }
 
 // ------------------------------------------------------------
@@ -344,6 +355,297 @@ function renderPnlChart() {
     if (entries.length === 0 || !pnlChart) return;
     pnlChart.applyOptions({ width: entries[0].contentRect.width });
   }).observe(container);
+}
+
+// ------------------------------------------------------------
+// GESTION DE BALANCE — dépôts/retraits avec date, pour un calcul de
+// performance correct (TWR) même quand de l'argent est ajouté plus tard.
+// ------------------------------------------------------------
+function loadBalanceMovements() {
+  try {
+    const raw = localStorage.getItem(BALANCE_MOVEMENTS_KEY);
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveBalanceMovements(movements) {
+  try { localStorage.setItem(BALANCE_MOVEMENTS_KEY, JSON.stringify(movements)); } catch { /* ignore */ }
+}
+
+function addBalanceMovement(date, amount, type) {
+  balanceMovements.push({ id: `bm-${Date.now()}`, date, amount: type === 'withdrawal' ? -Math.abs(amount) : Math.abs(amount), type });
+  balanceMovements.sort((a, b) => a.date.localeCompare(b.date));
+  saveBalanceMovements(balanceMovements);
+}
+
+function removeBalanceMovement(id) {
+  balanceMovements = balanceMovements.filter(m => m.id !== id);
+  saveBalanceMovements(balanceMovements);
+}
+
+function renderBalancePanel() {
+  const rows = balanceMovements.length > 0
+    ? balanceMovements.map(m => `
+        <tr>
+          <td>${m.date}</td>
+          <td style="color:${m.type === 'withdrawal' ? 'var(--bear)' : 'var(--bull)'}">${m.type === 'withdrawal' ? 'Retrait' : 'Dépôt'}</td>
+          <td>${m.amount >= 0 ? '+' : ''}${m.amount.toFixed(2)}$</td>
+          <td><button class="balance-remove-btn" data-id="${m.id}">Retirer</button></td>
+        </tr>
+      `).join('')
+    : '';
+
+  els.balancePanelContainer.innerHTML = `
+    <div class="balance-panel">
+      <div class="balance-panel-title">💰 Historique de balance</div>
+      <div class="balance-panel-sub">
+        Enregistre ta balance de départ et tout dépôt/retrait ultérieur, avec leur date — nécessaire pour calculer une performance en % juste (méthode Time-Weighted Return), qui ne se laisse pas fausser par l'argent que tu ajoutes en cours de route.
+      </div>
+      <div class="balance-form-row">
+        <div class="balance-form-field">
+          <label>Date</label>
+          <input type="date" id="bm-date" value="${new Date().toISOString().slice(0, 10)}">
+        </div>
+        <div class="balance-form-field">
+          <label>Montant ($)</label>
+          <input type="number" id="bm-amount" placeholder="230" step="0.01">
+        </div>
+        <div class="balance-form-field">
+          <label>Type</label>
+          <select id="bm-type">
+            <option value="deposit">Dépôt</option>
+            <option value="withdrawal">Retrait</option>
+          </select>
+        </div>
+        <button class="balance-add-btn" id="bm-add-btn">+ Ajouter</button>
+      </div>
+      ${balanceMovements.length > 0 ? `
+        <table class="balance-movements-table">
+          <thead><tr><th>Date</th><th>Type</th><th>Montant</th><th></th></tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      ` : `<div class="balance-empty-hint">Aucun mouvement enregistré — ajoute ta balance de départ pour commencer (ex: date de ton premier trade ORB, montant initial).</div>`}
+    </div>
+  `;
+
+  document.getElementById('bm-add-btn').addEventListener('click', () => {
+    const date = document.getElementById('bm-date').value;
+    const amount = parseFloat(document.getElementById('bm-amount').value);
+    const type = document.getElementById('bm-type').value;
+    if (!date) { alert('Renseigne une date.'); return; }
+    if (isNaN(amount) || amount <= 0) { alert('Montant invalide.'); return; }
+    addBalanceMovement(date, amount, type);
+    renderBalancePanel();
+    renderComparePanel();
+  });
+
+  els.balancePanelContainer.querySelectorAll('.balance-remove-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      removeBalanceMovement(btn.dataset.id);
+      renderBalancePanel();
+      renderComparePanel();
+    });
+  });
+}
+
+// ------------------------------------------------------------
+// CALCUL TWR (Time-Weighted Return) — neutralise l'effet des dépôts/retraits
+// pour ne mesurer que la vraie performance de la stratégie.
+// ------------------------------------------------------------
+function computeOrbTwrSeries() {
+  if (balanceMovements.length === 0) return null;
+
+  // Balance au fil du temps : commence au premier mouvement, augmentée/diminuée par
+  // chaque dépôt/retrait, et par le PnL de chaque jour de trading.
+  const pnlByDay = {};
+  allTrades.forEach(t => { pnlByDay[t.date] = (pnlByDay[t.date] || 0) + t.pnl; });
+
+  const firstDate = balanceMovements[0].date;
+  const today = new Date().toISOString().slice(0, 10);
+
+  // Construit la timeline jour par jour depuis le premier mouvement jusqu'à aujourd'hui
+  const allDatesSet = new Set([...Object.keys(pnlByDay), ...balanceMovements.map(m => m.date)]);
+  const timeline = [];
+  let cursor = new Date(firstDate);
+  const end = new Date(today);
+  while (cursor <= end) {
+    timeline.push(cursor.toISOString().slice(0, 10));
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  let balance = 0;
+  let cumulativeReturn = 1; // facteur multiplicatif, part de 1 (= 0%)
+  const series = [];
+
+  for (const dateKey of timeline) {
+    const movementsToday = balanceMovements.filter(m => m.date === dateKey);
+    const balanceBeforeFlows = balance;
+
+    // Applique les flux (dépôts/retraits) du jour
+    movementsToday.forEach(m => { balance += m.amount; });
+
+    // Applique le PnL du jour, s'il y en a un
+    const pnlToday = pnlByDay[dateKey] || 0;
+    if (pnlToday !== 0 && balanceBeforeFlows > 0) {
+      const dailyReturn = pnlToday / balanceBeforeFlows;
+      cumulativeReturn *= (1 + dailyReturn);
+    }
+    balance += pnlToday;
+
+    const time = Math.floor(new Date(dateKey).getTime() / 1000);
+    series.push({ time, value: (cumulativeReturn - 1) * 100 }); // en % depuis le départ
+  }
+
+  return series;
+}
+
+// ------------------------------------------------------------
+// FETCH ETF — via le Worker Cloudflare existant
+// ------------------------------------------------------------
+async function fetchEtfDailyData(ticker, fromDate) {
+  const url = `${WORKER_URL}?ticker=${encodeURIComponent(ticker)}&interval=1d&range=2y`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const data = await res.json();
+  if (data?.chart?.error) throw new Error(data.chart.error.description || 'Erreur Yahoo');
+  if (!data?.chart?.result?.[0]) throw new Error('Réponse vide');
+
+  const result = data.chart.result[0];
+  const timestamps = result.timestamp;
+  const closes = result.indicators.quote[0].close;
+
+  const fromTs = new Date(fromDate).getTime() / 1000;
+  const points = [];
+  for (let i = 0; i < timestamps.length; i++) {
+    if (closes[i] == null || timestamps[i] < fromTs) continue;
+    points.push({ time: timestamps[i], close: closes[i] });
+  }
+  return points;
+}
+
+function normalizeToPercent(points) {
+  if (points.length === 0) return [];
+  const base = points[0].close;
+  return points.map(p => ({ time: p.time, value: ((p.close - base) / base) * 100 }));
+}
+
+// ------------------------------------------------------------
+// RENDU — panneau de comparaison
+// ------------------------------------------------------------
+function renderComparePanel() {
+  if (balanceMovements.length === 0) {
+    els.comparePanelContainer.innerHTML = `
+      <div class="compare-panel">
+        <div class="compare-panel-header"><div class="balance-panel-title">📊 ORB vs ETF World vs ETF Nasdaq 100</div></div>
+        <div class="chart-empty-hint">Renseigne d'abord ta balance de départ ci-dessus pour activer cette comparaison.</div>
+      </div>
+    `;
+    return;
+  }
+
+  els.comparePanelContainer.innerHTML = `
+    <div class="compare-panel">
+      <div class="compare-panel-header">
+        <div class="balance-panel-title">📊 ORB vs ETF World vs ETF Nasdaq 100</div>
+        <button class="compare-refresh-btn" id="compare-refresh-btn">Actualiser les ETF</button>
+      </div>
+      <div class="compare-legend">
+        <div class="compare-legend-item"><span class="compare-legend-swatch" style="background:#4A9B7F"></span>ORB (toi)</div>
+        <div class="compare-legend-item"><span class="compare-legend-swatch" style="background:#D4A24C"></span>ETF World (VWCE.DE)</div>
+        <div class="compare-legend-item"><span class="compare-legend-swatch" style="background:#9B7FD4"></span>ETF Nasdaq 100 (QQQ)</div>
+      </div>
+      <div id="compare-chart-container"></div>
+      <div id="compare-summary-row" class="compare-summary-row"></div>
+    </div>
+  `;
+
+  document.getElementById('compare-refresh-btn').addEventListener('click', loadAndRenderCompareChart);
+  loadAndRenderCompareChart();
+}
+
+async function loadAndRenderCompareChart() {
+  const container = document.getElementById('compare-chart-container');
+  const summaryRow = document.getElementById('compare-summary-row');
+  const btn = document.getElementById('compare-refresh-btn');
+  if (!container) return;
+
+  container.innerHTML = `<div class="chart-empty-hint">Chargement des données ETF...</div>`;
+  if (btn) { btn.disabled = true; btn.textContent = 'Chargement...'; }
+
+  try {
+    const orbSeries = computeOrbTwrSeries();
+    const fromDate = balanceMovements[0].date;
+
+    const [worldPoints, nasdaqPoints] = await Promise.all([
+      fetchEtfDailyData(ETF_WORLD_TICKER, fromDate),
+      fetchEtfDailyData(ETF_NASDAQ_TICKER, fromDate),
+    ]);
+
+    const worldSeries = normalizeToPercent(worldPoints);
+    const nasdaqSeries = normalizeToPercent(nasdaqPoints);
+
+    renderCompareChart(orbSeries, worldSeries, nasdaqSeries);
+    renderCompareSummary(orbSeries, worldSeries, nasdaqSeries, summaryRow);
+  } catch (e) {
+    container.innerHTML = `<div class="chart-empty-hint" style="color:var(--bear);">Erreur : ${escapeHtml(e.message)}</div>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Actualiser les ETF'; }
+  }
+}
+
+function renderCompareChart(orbSeries, worldSeries, nasdaqSeries) {
+  const container = document.getElementById('compare-chart-container');
+  if (!container) return;
+
+  if (typeof LightweightCharts === 'undefined') {
+    container.innerHTML = `<div class="chart-empty-hint">Graphique indisponible (librairie non chargée).</div>`;
+    return;
+  }
+
+  container.innerHTML = '';
+
+  compareChart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: 320,
+    layout: { background: { color: 'transparent' }, textColor: '#6B6D73', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
+    grid: { vertLines: { color: '#1A1B1F' }, horzLines: { color: '#1A1B1F' } },
+    rightPriceScale: { borderColor: '#24262B' },
+    timeScale: { borderColor: '#24262B', timeVisible: false },
+  });
+
+  if (orbSeries && orbSeries.length > 0) {
+    const orbLine = compareChart.addLineSeries({ color: '#4A9B7F', lineWidth: 2, priceLineVisible: false });
+    orbLine.setData(orbSeries);
+  }
+
+  const worldLine = compareChart.addLineSeries({ color: '#D4A24C', lineWidth: 2, priceLineVisible: false });
+  worldLine.setData(worldSeries);
+
+  const nasdaqLine = compareChart.addLineSeries({ color: '#9B7FD4', lineWidth: 2, priceLineVisible: false });
+  nasdaqLine.setData(nasdaqSeries);
+
+  compareChart.timeScale().fitContent();
+
+  new ResizeObserver(entries => {
+    if (entries.length === 0 || !compareChart) return;
+    compareChart.applyOptions({ width: entries[0].contentRect.width });
+  }).observe(container);
+}
+
+function renderCompareSummary(orbSeries, worldSeries, nasdaqSeries, container) {
+  if (!container) return;
+  const lastOrb = orbSeries && orbSeries.length > 0 ? orbSeries[orbSeries.length - 1].value : null;
+  const lastWorld = worldSeries.length > 0 ? worldSeries[worldSeries.length - 1].value : null;
+  const lastNasdaq = nasdaqSeries.length > 0 ? nasdaqSeries[nasdaqSeries.length - 1].value : null;
+
+  const fmt = (v) => v == null ? '—' : `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+  const color = (v) => v == null ? 'var(--text-dim)' : v >= 0 ? 'var(--bull)' : 'var(--bear)';
+
+  container.innerHTML = `
+    <div class="compare-summary-item"><span class="label">ORB (toi)</span><span style="color:${color(lastOrb)}">${fmt(lastOrb)}</span></div>
+    <div class="compare-summary-item"><span class="label">ETF World</span><span style="color:${color(lastWorld)}">${fmt(lastWorld)}</span></div>
+    <div class="compare-summary-item"><span class="label">ETF Nasdaq 100</span><span style="color:${color(lastNasdaq)}">${fmt(lastNasdaq)}</span></div>
+  `;
 }
 
 function escapeHtml(str) {
