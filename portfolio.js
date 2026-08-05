@@ -4,6 +4,15 @@
 
 const HISTORY_KEY = 'orb-scanner-history'; // même clé que le journal ORB (app.js)
 
+const TIMEFRAMES = [
+  { id: '24H', label: '24h' },
+  { id: '1W', label: '1 semaine' },
+  { id: '1M', label: '1 mois' },
+  { id: 'YTD', label: 'YTD' },
+  { id: '1Y', label: '1 an' },
+  { id: 'MAX', label: 'Max' },
+];
+
 const els = {
   summaryContainer: document.getElementById('summary-container'),
   calendarContainer: document.getElementById('calendar-container'),
@@ -215,15 +224,6 @@ function formatDateLong(dateKey) {
 // ------------------------------------------------------------
 // GRAPHIQUE — PnL cumulé dans le temps, avec sélecteur de timeframe
 // ------------------------------------------------------------
-const TIMEFRAMES = [
-  { id: '24H', label: '24h' },
-  { id: '1W', label: '1 semaine' },
-  { id: '1M', label: '1 mois' },
-  { id: 'YTD', label: 'YTD' },
-  { id: '1Y', label: '1 an' },
-  { id: 'MAX', label: 'Max' },
-];
-
 function renderChartPanel() {
   if (allTrades.length === 0) {
     els.chartPanelContainer.innerHTML = '';
