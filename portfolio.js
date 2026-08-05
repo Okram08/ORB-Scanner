@@ -8,11 +8,14 @@ const els = {
   summaryContainer: document.getElementById('summary-container'),
   calendarContainer: document.getElementById('calendar-container'),
   dayDetailContainer: document.getElementById('day-detail-container'),
+  chartPanelContainer: document.getElementById('chart-panel-container'),
 };
 
 let currentMonth = new Date().getMonth(); // 0-11
 let currentYear = new Date().getFullYear();
 let allTrades = [];
+let currentTimeframe = '1M';
+let pnlChart = null;
 
 init();
 
@@ -20,6 +23,7 @@ function init() {
   allTrades = loadHistory();
   renderSummary();
   renderCalendar();
+  renderChartPanel();
 }
 
 // ------------------------------------------------------------
@@ -206,6 +210,140 @@ function formatDateLong(dateKey) {
   const [y, m, d] = dateKey.split('-').map(Number);
   const date = new Date(y, m - 1, d);
   return date.toLocaleDateString('fr-BE', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+}
+
+// ------------------------------------------------------------
+// GRAPHIQUE — PnL cumulé dans le temps, avec sélecteur de timeframe
+// ------------------------------------------------------------
+const TIMEFRAMES = [
+  { id: '24H', label: '24h' },
+  { id: '1W', label: '1 semaine' },
+  { id: '1M', label: '1 mois' },
+  { id: 'YTD', label: 'YTD' },
+  { id: '1Y', label: '1 an' },
+  { id: 'MAX', label: 'Max' },
+];
+
+function renderChartPanel() {
+  if (allTrades.length === 0) {
+    els.chartPanelContainer.innerHTML = '';
+    return;
+  }
+
+  els.chartPanelContainer.innerHTML = `
+    <div class="chart-panel">
+      <div class="chart-panel-header">
+        <div class="chart-panel-title">Évolution du PnL cumulé</div>
+        <div class="timeframe-selector" id="timeframe-selector">
+          ${TIMEFRAMES.map(tf => `<button class="timeframe-btn ${tf.id === currentTimeframe ? 'active' : ''}" data-tf="${tf.id}">${tf.label}</button>`).join('')}
+        </div>
+      </div>
+      <div id="pnl-chart-container"></div>
+    </div>
+  `;
+
+  document.getElementById('timeframe-selector').querySelectorAll('.timeframe-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      currentTimeframe = btn.dataset.tf;
+      renderChartPanel();
+    });
+  });
+
+  renderPnlChart();
+}
+
+// Filtre les trades selon le timeframe sélectionné, en se basant sur la date (jour) du trade
+function filterTradesByTimeframe(trades, timeframe) {
+  const now = new Date();
+  const todayKey = formatDateKey(now);
+
+  if (timeframe === '24H') {
+    // Pas d'heure précise dans le journal — équivalent pratique : les trades du jour même
+    return trades.filter(t => t.date === todayKey);
+  }
+  if (timeframe === '1W') {
+    const weekAgo = new Date(now); weekAgo.setDate(weekAgo.getDate() - 7);
+    return trades.filter(t => new Date(t.date) >= weekAgo);
+  }
+  if (timeframe === '1M') {
+    const monthAgo = new Date(now); monthAgo.setMonth(monthAgo.getMonth() - 1);
+    return trades.filter(t => new Date(t.date) >= monthAgo);
+  }
+  if (timeframe === 'YTD') {
+    const yearStart = new Date(now.getFullYear(), 0, 1);
+    return trades.filter(t => new Date(t.date) >= yearStart);
+  }
+  if (timeframe === '1Y') {
+    const yearAgo = new Date(now); yearAgo.setFullYear(yearAgo.getFullYear() - 1);
+    return trades.filter(t => new Date(t.date) >= yearAgo);
+  }
+  return trades; // MAX
+}
+
+function formatDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+function renderPnlChart() {
+  const container = document.getElementById('pnl-chart-container');
+  if (!container) return;
+
+  const filtered = filterTradesByTimeframe(allTrades, currentTimeframe)
+    .slice()
+    .sort((a, b) => a.date.localeCompare(b.date) || (a.timestamp || 0) - (b.timestamp || 0));
+
+  if (filtered.length === 0) {
+    container.innerHTML = `<div class="chart-empty-hint">Aucun trade sur cette période.</div>`;
+    return;
+  }
+
+  if (typeof LightweightCharts === 'undefined') {
+    container.innerHTML = `<div class="chart-empty-hint">Graphique indisponible (librairie non chargée).</div>`;
+    return;
+  }
+
+  container.innerHTML = '';
+
+  // Agrège le PnL cumulé par jour (un point par jour, pas par trade individuel, plus lisible)
+  const byDay = {};
+  filtered.forEach(t => { byDay[t.date] = (byDay[t.date] || 0) + t.pnl; });
+  const sortedDays = Object.keys(byDay).sort();
+
+  let cumulative = 0;
+  const points = sortedDays.map(dateKey => {
+    cumulative += byDay[dateKey];
+    const [y, m, d] = dateKey.split('-').map(Number);
+    const time = Math.floor(new Date(y, m - 1, d).getTime() / 1000);
+    return { time, value: cumulative };
+  });
+
+  pnlChart = LightweightCharts.createChart(container, {
+    width: container.clientWidth,
+    height: 300,
+    layout: { background: { color: 'transparent' }, textColor: '#6B6D73', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
+    grid: { vertLines: { color: '#1A1B1F' }, horzLines: { color: '#1A1B1F' } },
+    rightPriceScale: { borderColor: '#24262B' },
+    timeScale: { borderColor: '#24262B', timeVisible: false },
+  });
+
+  const isPositive = points[points.length - 1].value >= 0;
+  const lineColor = isPositive ? '#4A9B7F' : '#C4554A';
+
+  const series = pnlChart.addAreaSeries({
+    lineColor,
+    topColor: isPositive ? 'rgba(74,155,127,0.25)' : 'rgba(196,85,74,0.25)',
+    bottomColor: 'rgba(74,155,127,0.0)',
+    lineWidth: 2,
+    priceLineVisible: false,
+  });
+
+  series.setData(points);
+  pnlChart.timeScale().fitContent();
+
+  new ResizeObserver(entries => {
+    if (entries.length === 0 || !pnlChart) return;
+    pnlChart.applyOptions({ width: entries[0].contentRect.width });
+  }).observe(container);
 }
 
 function escapeHtml(str) {
