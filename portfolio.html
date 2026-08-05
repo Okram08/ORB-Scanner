@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Portfolio — Calendrier de performance</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600;700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0A0B0D;
+    --bg-panel: #121316;
+    --bg-panel-raised: #17181C;
+    --border: #24262B;
+    --text: #C8C6C0;
+    --text-dim: #6B6D73;
+    --text-bright: #F0EEE8;
+    --bull: #4A9B7F;
+    --bull-dim: #1E3A30;
+    --bear: #C4554A;
+    --bear-dim: #3A211E;
+    --warn: #D4A24C;
+    --mono: 'JetBrains Mono', monospace;
+    --sans: 'Inter', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); min-height: 100vh; }
+  .app { max-width: 1100px; margin: 0 auto; padding: 24px; }
+
+  header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 20px; border-bottom: 1px solid var(--border); margin-bottom: 24px;
+    flex-wrap: wrap; gap: 16px;
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand-mark { font-family: var(--mono); font-weight: 700; font-size: 20px; color: var(--text-bright); }
+  .brand-mark span { color: var(--bull); }
+  .brand-sub { font-size: 12px; color: var(--text-dim); font-family: var(--mono); }
+  .back-link { font-size: 12px; color: var(--bull); text-decoration: none; }
+  .back-link:hover { text-decoration: underline; }
+
+  .summary-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 14px;
+    margin-bottom: 24px;
+  }
+
+  .summary-card {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+  }
+
+  .summary-label {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-dim);
+    margin-bottom: 8px;
+    font-weight: 600;
+  }
+
+  .summary-value {
+    font-family: var(--mono);
+    font-size: 22px;
+    font-weight: 700;
+    color: var(--text-bright);
+  }
+
+  .up { color: var(--bull); }
+  .down { color: var(--bear); }
+
+  .calendar-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 24px;
+  }
+
+  .calendar-controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    margin-bottom: 20px;
+  }
+
+  .month-nav-btn {
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border);
+    color: var(--text);
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .month-nav-btn:hover { border-color: var(--bull); }
+
+  .month-label {
+    font-size: 18px;
+    font-weight: 700;
+    color: var(--text-bright);
+    min-width: 160px;
+    text-align: center;
+  }
+
+  .today-btn {
+    background: var(--bg-panel-raised);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    font-family: var(--sans);
+    font-size: 12px;
+    font-weight: 600;
+    padding: 6px 12px;
+    border-radius: 6px;
+    cursor: pointer;
+  }
+  .today-btn:hover { border-color: var(--bull); color: var(--text); }
+
+  .weekday-row {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .weekday-label {
+    text-align: center;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    font-family: var(--sans);
+  }
+
+  .calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 8px;
+  }
+
+  .day-cell {
+    aspect-ratio: 1.15;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-panel-raised);
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    cursor: default;
+    transition: transform 0.1s ease;
+  }
+
+  .day-cell.has-trades { cursor: pointer; }
+  .day-cell.has-trades:hover { transform: scale(1.03); }
+
+  .day-cell.empty { background: transparent; border: none; }
+
+  .day-cell.positive { background: var(--bull-dim); border-color: var(--bull); }
+  .day-cell.negative { background: var(--bear-dim); border-color: var(--bear); }
+  .day-cell.zero { background: var(--bg-panel-raised); border-color: var(--border); }
+
+  .day-number {
+    font-family: var(--sans);
+    font-size: 12px;
+    color: var(--text-dim);
+    font-weight: 600;
+  }
+
+  .day-pnl {
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 700;
+    text-align: right;
+  }
+
+  .day-pnl.up { color: var(--bull); }
+  .day-pnl.down { color: var(--bear); }
+  .day-pnl.neutral { color: var(--text-dim); }
+
+  .day-trade-count {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    text-align: right;
+  }
+
+  .total-profit-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-top: 20px;
+    padding-top: 16px;
+    border-top: 1px solid var(--border);
+  }
+
+  .total-profit-label {
+    font-size: 13px;
+    color: var(--text-dim);
+    font-family: var(--sans);
+  }
+
+  .total-profit-value {
+    font-family: var(--mono);
+    font-size: 20px;
+    font-weight: 700;
+  }
+
+  .day-detail-panel {
+    background: var(--bg-panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 20px;
+    margin-top: 20px;
+  }
+
+  .day-detail-title {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--text-bright);
+    margin-bottom: 14px;
+  }
+
+  .trade-detail-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border);
+    font-family: var(--mono);
+    font-size: 13px;
+  }
+  .trade-detail-row:last-child { border-bottom: none; }
+
+  .trade-detail-ticker { font-weight: 700; color: var(--text-bright); min-width: 60px; }
+  .trade-detail-dir { min-width: 40px; }
+  .trade-detail-grade { min-width: 24px; color: var(--text-dim); }
+  .trade-detail-pnl { margin-left: auto; font-weight: 700; }
+
+  .empty-state {
+    text-align: center;
+    padding: 60px 20px;
+    color: var(--text-dim);
+  }
+  .empty-state .glyph { font-family: var(--mono); font-size: 36px; color: var(--border); margin-bottom: 16px; }
+  .empty-state p { font-size: 14px; max-width: 420px; margin: 0 auto; line-height: 1.6; }
+
+  footer {
+    margin-top: 32px; padding-top: 16px; border-top: 1px solid var(--border);
+    font-size: 11px; color: var(--text-dim); font-family: var(--mono); text-align: center; line-height: 1.7;
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <header>
+    <div class="brand">
+      <div class="brand-mark">PORTFOLIO<span>·</span>ORB</div>
+      <div class="brand-sub">calendrier de performance</div>
+    </div>
+    <div>
+      <a href="index.html" class="back-link">← Retour au scanner ORB</a>
+      <a href="guides.html" class="back-link" style="margin-left:12px;">📖 Guides</a>
+    </div>
+  </header>
+
+  <div id="summary-container"></div>
+
+  <div id="calendar-container">
+    <div class="empty-state">
+      <div class="glyph">▦</div>
+      <p>Aucun trade enregistré dans le journal ORB pour l'instant. Une fois que tu ajoutes des trades via "+ Ajouter au suivi" et marques leur résultat, ils apparaîtront ici jour par jour.</p>
+    </div>
+  </div>
+
+  <div id="day-detail-container"></div>
+
+  <footer>
+    Basé sur ton journal de suivi ORB (localStorage) — trades avec PnL calculé uniquement.
+  </footer>
+</div>
+
+<script src="portfolio.js"></script>
+</body>
+</html>
