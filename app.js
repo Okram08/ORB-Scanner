@@ -2,8 +2,6 @@
 // ORB SCANNER — logique principale
 // ============================================================
 
-// Chaque entrée : { build: fn(url) -> url proxifiée, parse: fn(responseText) -> JSON Yahoo }
-// Certains proxies renvoient le JSON brut, d'autres l'enveloppent dans { contents: "..." } (allorigins /get).
 const CORS_PROXIES = [
   {
     name: 'cloudflare-worker',
@@ -45,14 +43,8 @@ const els = {
   balanceBar: document.getElementById('balance-bar'),
 };
 
-// ------------------------------------------------------------
-// FENÊTRE DE TRADING — 9h30-11h00 heure de marché US (America/New_York),
-// soit ta fenêtre stratégique de 1h30 après l'ouverture. Calculé en heure
-// de marché US directement (via Intl), donc pas de bug de décalage
-// été/hiver Europe-US à gérer à la main.
-// ------------------------------------------------------------
-const SESSION_START_MIN = 9 * 60 + 30;  // 9h30 ET = ouverture NYSE/Nasdaq
-const SESSION_END_MIN = 11 * 60;         // 11h00 ET = fin de la fenêtre ORB stratégique (1h30 après l'ouverture)
+const SESSION_START_MIN = 9 * 60 + 30;
+const SESSION_END_MIN = 11 * 60;
 
 function getMarketTimeInfo() {
   const now = new Date();
@@ -61,20 +53,16 @@ function getMarketTimeInfo() {
     hour: '2-digit', minute: '2-digit', hour12: false,
     weekday: 'short',
   }).formatToParts(now);
-
   const hour = parseInt(parts.find(p => p.type === 'hour').value, 10);
   const minute = parseInt(parts.find(p => p.type === 'minute').value, 10);
   const weekday = parts.find(p => p.type === 'weekday').value;
   const totalMin = hour * 60 + minute;
   const isWeekend = weekday === 'Sat' || weekday === 'Sun';
-
   return { totalMin, isWeekend, hour, minute };
 }
 
 function renderSessionStatus() {
   const { totalMin, isWeekend } = getMarketTimeInfo();
-
-  // Convertit une minute-du-jour US en heure locale du navigateur, pour affichage
   const formatLocalTime = (marketMinutes) => {
     const now = new Date();
     const marketNow = new Date(now.toLocaleString('en-US', { timeZone: 'America/New_York' }));
@@ -82,7 +70,6 @@ function renderSessionStatus() {
     const target = new Date(now.getTime() + diffFromMarketMidnight * 60000);
     return target.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   };
-
   let html;
   if (isWeekend) {
     html = `<div class="session-status session-closed"><span class="dot"></span>Marché fermé (week-end)<span class="session-detail">La fenêtre ORB reprendra lundi à l'ouverture</span></div>`;
@@ -95,46 +82,24 @@ function renderSessionStatus() {
   } else {
     html = `<div class="session-status session-closed"><span class="dot"></span>Fenêtre fermée pour aujourd'hui<span class="session-detail">L'edge ORB s'érode après 1h30 — pas la peine de rester devant l'écran</span></div>`;
   }
-
   els.sessionStatusBar.innerHTML = html;
 }
 
 renderSessionStatus();
-setInterval(renderSessionStatus, 60000); // rafraîchit chaque minute
+setInterval(renderSessionStatus, 60000);
 
-// ------------------------------------------------------------
-// BALANCE & GESTION DU RISQUE — persistant, pour calculer la taille
-// de position optimale sur chaque trade (montant risqué = % fixe de la balance)
-// ------------------------------------------------------------
 const BALANCE_KEY = 'orb-scanner-balance';
 const RISK_PCT_KEY = 'orb-scanner-risk-pct';
-const DEFAULT_RISK_PCT = 1; // 1% de la balance risqué par trade, par défaut
+const DEFAULT_RISK_PCT = 1;
 
 function loadBalance() {
-  try {
-    const raw = localStorage.getItem(BALANCE_KEY);
-    return raw ? parseFloat(raw) : null;
-  } catch {
-    return null;
-  }
+  try { const raw = localStorage.getItem(BALANCE_KEY); return raw ? parseFloat(raw) : null; } catch { return null; }
 }
-
-function saveBalance(value) {
-  try { localStorage.setItem(BALANCE_KEY, String(value)); } catch { /* quota / navigation privée */ }
-}
-
+function saveBalance(value) { try { localStorage.setItem(BALANCE_KEY, String(value)); } catch {} }
 function loadRiskPct() {
-  try {
-    const raw = localStorage.getItem(RISK_PCT_KEY);
-    return raw ? parseFloat(raw) : DEFAULT_RISK_PCT;
-  } catch {
-    return DEFAULT_RISK_PCT;
-  }
+  try { const raw = localStorage.getItem(RISK_PCT_KEY); return raw ? parseFloat(raw) : DEFAULT_RISK_PCT; } catch { return DEFAULT_RISK_PCT; }
 }
-
-function saveRiskPct(value) {
-  try { localStorage.setItem(RISK_PCT_KEY, String(value)); } catch { /* quota / navigation privée */ }
-}
+function saveRiskPct(value) { try { localStorage.setItem(RISK_PCT_KEY, String(value)); } catch {} }
 
 let userBalance = loadBalance();
 let riskPct = loadRiskPct();
@@ -149,7 +114,6 @@ function renderBalanceBar() {
     document.getElementById('set-balance-link').addEventListener('click', promptEditBalance);
     return;
   }
-
   els.balanceBar.innerHTML = `
     <div class="balance-bar">
       <span class="balance-label">Balance :</span>
@@ -158,14 +122,13 @@ function renderBalanceBar() {
       <span class="risk-pct-value" id="risk-pct-display">${riskPct}%</span>
       <span class="risk-pct" style="margin-left:auto; color:var(--text-dim);">(${(userBalance * riskPct / 100).toLocaleString('fr-BE', { maximumFractionDigits: 0 })} $ risqués / trade)</span>
     </div>`;
-
   document.getElementById('balance-display').addEventListener('click', promptEditBalance);
   document.getElementById('risk-pct-display').addEventListener('click', promptEditRiskPct);
 }
 
 function promptEditBalance() {
   const input = prompt('Ta balance de trading actuelle ($) :', userBalance !== null ? userBalance : '');
-  if (input === null) return; // annulé
+  if (input === null) return;
   const value = parseFloat(input.replace(',', '.'));
   if (isNaN(value) || value <= 0) { alert('Montant invalide.'); return; }
   userBalance = value;
@@ -185,35 +148,16 @@ function promptEditRiskPct() {
 
 renderBalanceBar();
 
-// Calcule la taille de position optimale pour un niveau de trade donné (long ou short),
-// en fonction de la balance et du % de risque renseignés. Retourne null si la balance
-// n'est pas encore renseignée (pas de calcul possible).
 function computePositionSize(entry, stop) {
   if (userBalance === null) return null;
   const riskAmount = userBalance * (riskPct / 100);
   const stopDistance = Math.abs(entry - stop);
   if (stopDistance <= 0) return null;
-
-  // Pas d'arrondi entier : beaucoup de brokers (Trading212, DEGIRO, etc.) permettent
-  // les actions fractionnées, donc le montant exact est plus utile qu'un nombre d'actions arrondi.
   let shares = riskAmount / stopDistance;
   let positionValue = shares * entry;
-
-  // Plafond obligatoire : le montant à investir ne peut jamais dépasser la balance
-  // disponible. Si le calcul de risque pur (% balance ÷ distance du stop) donne un
-  // montant supérieur à la balance — ce qui arrive quand le stop est très proche de
-  // l'entrée par rapport au prix du titre — on plafonne à la balance totale et on
-  // signale que le risque réel réellement engagé dépasse alors le % visé.
   const balanceCapped = positionValue > userBalance;
-  if (balanceCapped) {
-    positionValue = userBalance;
-    shares = positionValue / entry;
-  }
-
-  // Risque réellement engagé une fois le plafond appliqué (peut dépasser le % visé
-  // si balanceCapped est vrai — c'est justement ce qu'on veut signaler à l'utilisateur).
+  if (balanceCapped) { positionValue = userBalance; shares = positionValue / entry; }
   const actualRiskAmount = shares * stopDistance;
-
   return { shares, riskAmount: actualRiskAmount, targetRiskAmount: riskAmount, stopDistance, positionValue, balanceCapped };
 }
 
@@ -224,21 +168,9 @@ const WATCHLIST_KEY = 'orb-scanner-watchlist';
 let watchlist = loadWatchlist();
 
 function loadWatchlist() {
-  try {
-    const raw = localStorage.getItem(WATCHLIST_KEY);
-    return raw ? JSON.parse(raw) : [];
-  } catch {
-    return [];
-  }
+  try { const raw = localStorage.getItem(WATCHLIST_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
 }
-
-function saveWatchlist() {
-  try {
-    localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist));
-  } catch {
-    // stockage indisponible (navigation privée, quota) — on continue sans persister
-  }
-}
+function saveWatchlist() { try { localStorage.setItem(WATCHLIST_KEY, JSON.stringify(watchlist)); } catch {} }
 
 function addToWatchlist(ticker) {
   ticker = ticker.trim().toUpperCase();
@@ -261,7 +193,6 @@ function renderWatchlistBar() {
       <button data-remove="${t}" title="Retirer">×</button>
     </div>
   `).join('');
-
   els.watchlistBar.innerHTML = `
     ${chips}
     <div class="watchlist-add">
@@ -270,29 +201,14 @@ function renderWatchlistBar() {
     </div>
     <button id="scan-all-btn" ${watchlist.length === 0 ? 'disabled' : ''}>⚡ Scanner tout (${watchlist.length})</button>
   `;
-
-  // ré-attacher les listeners (le HTML a été régénéré)
   els.watchlistBar.querySelectorAll('[data-remove]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      removeFromWatchlist(btn.dataset.remove);
-    });
+    btn.addEventListener('click', (e) => { e.stopPropagation(); removeFromWatchlist(btn.dataset.remove); });
   });
-
   const wInput = document.getElementById('watchlist-input');
   const wAddBtn = document.getElementById('watchlist-add-btn');
-  wAddBtn.addEventListener('click', () => {
-    addToWatchlist(wInput.value);
-    wInput.value = '';
-    wInput.focus();
-  });
-  wInput.addEventListener('keydown', (e) => {
-    if (e.key === 'Enter') { addToWatchlist(wInput.value); wInput.value = ''; }
-  });
-
+  wAddBtn.addEventListener('click', () => { addToWatchlist(wInput.value); wInput.value = ''; wInput.focus(); });
+  wInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { addToWatchlist(wInput.value); wInput.value = ''; } });
   document.getElementById('scan-all-btn')?.addEventListener('click', runScanAll);
-
-  // clic sur un chip (hors bouton ×) → analyse détaillée directe
   els.watchlistBar.querySelectorAll('.watchlist-chip').forEach(chip => {
     chip.addEventListener('click', (e) => {
       if (e.target.closest('button')) return;
@@ -302,14 +218,12 @@ function renderWatchlistBar() {
   });
 }
 
-renderWatchlistBar(); // rendu initial au chargement de la page
+renderWatchlistBar();
 
 els.btn.addEventListener('click', runAnalysis);
 els.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') runAnalysis(); });
 document.getElementById('history-btn').addEventListener('click', renderHistoryPage);
 
-// Récupère + calcule tout pour un ticker, sans toucher au DOM — réutilisable
-// pour la vue détaillée (runAnalysis) et le scan groupé (runScanAll).
 async function analyzeTicker(ticker, orbMinutes) {
   const raw = await fetchYahooData(ticker);
   const parsed = parseYahooResponse(raw);
@@ -317,23 +231,15 @@ async function analyzeTicker(ticker, orbMinutes) {
     throw new Error('Pas assez de données intraday (marché fermé ou ticker invalide)');
   }
   const analysis = computeIndicators(parsed, orbMinutes);
-
-  // Le score n'est plus figé : il évolue volontairement avec la persistance du
-  // breakout dans le temps (voir computeSetupScore) — basé uniquement sur des
-  // bougies closes, donc stable entre deux scans rapprochés, mais qui progresse
-  // légitimement à mesure que le niveau tient (ou se dégrade en cas de fakeout).
   return { parsed, analysis };
 }
 
 async function runAnalysis() {
   const ticker = els.input.value.trim().toUpperCase();
   if (!ticker) return;
-
   const orbMinutes = parseInt(els.orbWindow.value, 10);
-
   setLoading(ticker);
   els.btn.disabled = true;
-
   try {
     const { parsed, analysis } = await analyzeTicker(ticker, orbMinutes);
     renderResults(ticker, parsed, analysis, orbMinutes);
@@ -344,31 +250,40 @@ async function runAnalysis() {
   }
 }
 
-// ------------------------------------------------------------
-// SCAN GROUPÉ — watchlist entière en parallèle
-// ------------------------------------------------------------
+function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+
+const SCAN_BATCH_SIZE = 4;
+const SCAN_BATCH_DELAY_MS = 8000;
+
 async function runScanAll() {
   if (watchlist.length === 0) return;
-
   const orbMinutes = parseInt(els.orbWindow.value, 10);
   const scanBtn = document.getElementById('scan-all-btn');
-  if (scanBtn) { scanBtn.disabled = true; scanBtn.textContent = '⚡ Scan en cours...'; }
+  if (scanBtn) { scanBtn.disabled = true; }
 
-  // état initial : tout en "loading"
   const results = {};
   watchlist.forEach(t => { results[t] = { status: 'loading' }; });
   renderScanTable(results, orbMinutes);
 
-  // lancer toutes les requêtes en parallèle, mettre à jour la ligne dès qu'un ticker répond
-  await Promise.all(watchlist.map(async (ticker) => {
-    try {
-      const { analysis } = await analyzeTicker(ticker, orbMinutes);
-      results[ticker] = { status: 'done', analysis };
-    } catch (err) {
-      results[ticker] = { status: 'error', message: err.message };
-    }
-    renderScanTable(results, orbMinutes);
-  }));
+  const batches = [];
+  for (let i = 0; i < watchlist.length; i += SCAN_BATCH_SIZE) {
+    batches.push(watchlist.slice(i, i + SCAN_BATCH_SIZE));
+  }
+
+  for (let b = 0; b < batches.length; b++) {
+    const batch = batches[b];
+    if (scanBtn) scanBtn.textContent = `⚡ Scan en cours... (${b * SCAN_BATCH_SIZE}/${watchlist.length})`;
+    await Promise.all(batch.map(async (ticker) => {
+      try {
+        const { analysis } = await analyzeTicker(ticker, orbMinutes);
+        results[ticker] = { status: 'done', analysis };
+      } catch (err) {
+        results[ticker] = { status: 'error', message: err.message };
+      }
+      renderScanTable(results, orbMinutes);
+    }));
+    if (b < batches.length - 1) await sleep(SCAN_BATCH_DELAY_MS);
+  }
 
   if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = `⚡ Scanner tout (${watchlist.length})`; }
 }
@@ -376,90 +291,44 @@ async function runScanAll() {
 function renderScanTable(results, orbMinutes) {
   const rows = watchlist.map(ticker => {
     const r = results[ticker];
-
     if (!r || r.status === 'loading') {
-      return `
-        <tr class="scan-row" data-ticker="${ticker}">
-          <td class="scan-ticker">${ticker}</td>
-          <td colspan="6"><span class="scan-signal-cell"><span class="scan-signal-dot dot-loading"></span>Analyse en cours...</span></td>
-        </tr>`;
+      return `<tr class="scan-row" data-ticker="${ticker}"><td class="scan-ticker">${ticker}</td><td colspan="6"><span class="scan-signal-cell"><span class="scan-signal-dot dot-loading"></span>Analyse en cours...</span></td></tr>`;
     }
-
     if (r.status === 'error') {
-      return `
-        <tr class="scan-row" data-ticker="${ticker}">
-          <td class="scan-ticker">${ticker}</td>
-          <td colspan="6"><span class="scan-signal-cell"><span class="scan-signal-dot dot-error"></span>${escapeHtml(r.message)}</span></td>
-        </tr>`;
+      return `<tr class="scan-row" data-ticker="${ticker}"><td class="scan-ticker">${ticker}</td><td colspan="6"><span class="scan-signal-cell"><span class="scan-signal-dot dot-error"></span>${escapeHtml(r.message)}</span></td></tr>`;
     }
-
     const a = r.analysis;
     const signalMeta = {
       bull: { dot: 'dot-bull', label: 'BREAKOUT HAUSSIER', row: 'row-bull' },
       bear: { dot: 'dot-bear', label: 'BREAKOUT BAISSIER', row: 'row-bear' },
       neutral: { dot: 'dot-neutral', label: 'Neutre', row: '' },
     }[a.signal];
-
     const change = a.lastClose - a.prevClose;
     const changePct = (change / a.prevClose) * 100;
     const isUp = change >= 0;
-
     const gradeColors = { S: 'var(--bull)', A: 'var(--bull)', B: 'var(--warn)', C: 'var(--warn)', D: 'var(--bear)', E: 'var(--bear)' };
     const scoreColor = gradeColors[a.setupScore.grade] || 'var(--text-dim)';
     const scoreCell = `<span style="font-weight:700; color:${scoreColor};">${a.setupScore.grade}</span>${a.setupScore.isNeutral ? '<span style="color:var(--text-dim); font-size:11px;"> (approche)</span>' : ''}`;
-
-    return `
-      <tr class="scan-row ${signalMeta.row}" data-ticker="${ticker}">
-        <td class="scan-ticker">${ticker}</td>
-        <td>
-          <span class="scan-signal-cell">
-            <span class="scan-signal-dot ${signalMeta.dot}"></span>${signalMeta.label}
-          </span>
-        </td>
-        <td>${scoreCell}</td>
-        <td>${a.lastClose.toFixed(2)}</td>
-        <td class="${isUp ? 'up' : 'down'}">${isUp ? '+' : ''}${changePct.toFixed(2)}%</td>
-        <td>ADX ${a.adx.toFixed(0)}</td>
-        <td>Vol ${a.relativeVolume.toFixed(1)}x</td>
-      </tr>`;
+    return `<tr class="scan-row ${signalMeta.row}" data-ticker="${ticker}"><td class="scan-ticker">${ticker}</td><td><span class="scan-signal-cell"><span class="scan-signal-dot ${signalMeta.dot}"></span>${signalMeta.label}</span></td><td>${scoreCell}</td><td>${a.lastClose.toFixed(2)}</td><td class="${isUp ? 'up' : 'down'}">${isUp ? '+' : ''}${changePct.toFixed(2)}%</td><td>ADX ${a.adx.toFixed(0)}</td><td>Vol ${a.relativeVolume.toFixed(1)}x</td></tr>`;
   }).join('');
 
   els.content.innerHTML = `
     <table class="scan-table">
-      <thead>
-        <tr>
-          <th>Ticker</th>
-          <th>Signal</th>
-          <th>Score</th>
-          <th>Prix</th>
-          <th>Var. jour</th>
-          <th>ADX</th>
-          <th>Vol. relatif</th>
-        </tr>
-      </thead>
+      <thead><tr><th>Ticker</th><th>Signal</th><th>Score</th><th>Prix</th><th>Var. jour</th><th>ADX</th><th>Vol. relatif</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
   `;
 
-  // clic sur une ligne (déjà résolue) → vue détaillée de ce ticker
   els.content.querySelectorAll('.scan-row').forEach(row => {
     const ticker = row.dataset.ticker;
     if (results[ticker]?.status === 'done') {
-      row.addEventListener('click', () => {
-        els.input.value = ticker;
-        runAnalysis();
-      });
+      row.addEventListener('click', () => { els.input.value = ticker; runAnalysis(); });
     }
   });
 }
 
-
-// ------------------------------------------------------------
-// FETCH — Yahoo Finance via proxy CORS (fallback en cascade)
-// ------------------------------------------------------------
 async function fetchYahooData(ticker) {
   const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=5m&range=5d`;
-
   const failures = [];
   for (const proxy of CORS_PROXIES) {
     try {
@@ -467,15 +336,12 @@ async function fetchYahooData(ticker) {
       const timeout = setTimeout(() => controller.abort(), 8000);
       const res = await fetch(proxy.build(yahooUrl), { signal: controller.signal });
       clearTimeout(timeout);
-
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const text = await res.text();
       const data = proxy.parse(text);
-
       if (data?.chart?.error) throw new Error(data.chart.error.description || 'Ticker introuvable');
       if (!data?.chart?.result?.[0]) throw new Error('Réponse vide');
-
-      return data; // succès
+      return data;
     } catch (e) {
       failures.push(`${proxy.name}: ${e.name === 'AbortError' ? 'timeout' : e.message}`);
       continue;
@@ -489,17 +355,10 @@ function parseYahooResponse(raw) {
   const meta = result.meta;
   const timestamps = result.timestamp;
   const quote = result.indicators.quote[0];
-
   if (!timestamps || !quote) return null;
-
-  const out = {
-    meta,
-    timestamps: [],
-    opens: [], highs: [], lows: [], closes: [], volumes: [],
-  };
-
+  const out = { meta, timestamps: [], opens: [], highs: [], lows: [], closes: [], volumes: [] };
   for (let i = 0; i < timestamps.length; i++) {
-    if (quote.close[i] == null) continue; // skip holes (pre/post market gaps)
+    if (quote.close[i] == null) continue;
     out.timestamps.push(timestamps[i]);
     out.opens.push(quote.open[i]);
     out.highs.push(quote.high[i]);
@@ -510,40 +369,17 @@ function parseYahooResponse(raw) {
   return out;
 }
 
-// ------------------------------------------------------------
-// INDICATEURS
-// ------------------------------------------------------------
-// ------------------------------------------------------------
-// SCORE DE QUALITÉ DE SETUP (S/A/B/C/D/E)
-// ------------------------------------------------------------
-// Ce n'est PAS une probabilité statistique — aucun backtest historique ne soutient
-// un vrai pourcentage ici. C'est un score de règles : plus il est haut, plus le setup
-// présente les caractéristiques qu'on a identifiées comme favorables à un ORB (distance
-// raisonnable au niveau de breakout, confluence des filtres, range ni trop large ni trop
-// étroit, tendance franche, volume confirmé). Documenté et transparent, pas une boîte noire.
 function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, adx, relativeVolume, priceAboveVwap, persistence }) {
-  // Cas "neutre" (pas encore de breakout confirmé, ou fakeout invalidé) : on évalue
-  // quand même un score indicatif, basé sur le côté du range le plus proche du prix
-  // actuel — utile pour repérer à l'avance les tickers qui approchent d'un niveau.
   const distToHigh = orbHigh - lastClose;
   const distToLow = lastClose - orbLow;
   const isNeutral = signal === 'neutral';
   const isLong = isNeutral ? (distToHigh <= distToLow) : (signal === 'bull');
-
   let points = 0;
   const maxPoints = 28;
   const details = [];
+  if (isNeutral) details.push(`ℹ Pas de breakout confirmé actuellement — score indicatif côté ${isLong ? 'haussier (ORB High)' : 'baissier (ORB Low)'}, le plus proche`);
 
-  if (isNeutral) {
-    details.push(`ℹ Pas de breakout confirmé actuellement — score indicatif côté ${isLong ? 'haussier (ORB High)' : 'baissier (ORB Low)'}, le plus proche`);
-  }
-
-  // 1. Persistance du breakout dans le temps (max 6 pts) — remplace l'ancien critère de
-  // "distance au niveau" qui se basait sur le prix instantané et rendait le score
-  // instable seconde par seconde. Ici, plus le niveau tient depuis longtemps sans
-  // retour dans le range, plus le score monte — cohérent avec l'idée qu'un breakout
-  // qui dure est un signal plus fiable qu'un breakout qui vient tout juste d'apparaître.
-  const MIN_MINUTES_FOR_TOP_GRADE = 10; // en dessous, plafond dur à B — voir plus bas
+  const MIN_MINUTES_FOR_TOP_GRADE = 10;
   let notYetConfirmedByTime = false;
   if (!persistence) {
     points += 0; details.push(`ℹ Pas encore assez de bougies closes depuis l'ouverture pour évaluer la tenue du niveau`);
@@ -557,8 +393,6 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
     points += 6; details.push(`✓ Niveau tenu depuis ${persistence.minutesSinceBreakout} min — breakout confirmé par la durée`);
   }
 
-  // 2. Qualité du range ORB vs ATR (max 5 pts) — un range ni trop large (risque énorme)
-  //    ni trop étroit (fakeout quasi garanti) par rapport à la volatilité normale du titre
   const rangeToAtrRatio = orbRange / atr;
   if (rangeToAtrRatio >= 0.8 && rangeToAtrRatio <= 2.5) {
     points += 5; details.push(`✓ Range ORB bien proportionné à la volatilité (${rangeToAtrRatio.toFixed(1)}× ATR)`);
@@ -568,7 +402,6 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
     points += 2; details.push(`⚠ Range ORB très large (${rangeToAtrRatio.toFixed(1)}× ATR) — stop potentiellement coûteux`);
   }
 
-  // 3. Force de la tendance ADX (max 5 pts)
   if (adx > 30) {
     points += 5; details.push(`✓ ADX ${adx.toFixed(0)} — tendance forte, bon terrain pour un breakout qui continue`);
   } else if (adx > 20) {
@@ -577,9 +410,6 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
     points += 0; details.push(`✗ ADX ${adx.toFixed(0)} — marché en range, risque de retournement`);
   }
 
-  // 4. Volume de confirmation depuis le breakout (max 4 pts) — utilise le volume cumulé
-  // DEPUIS la cassure quand disponible (plus pertinent que le volume au seul moment T),
-  // sinon retombe sur le volume relatif classique de l'ORB.
   const volumeToUse = persistence ? persistence.relativeVolumeSinceBreakout : relativeVolume;
   if (volumeToUse > 2) {
     points += 4; details.push(`✓ Volume ${volumeToUse.toFixed(1)}× la normale depuis la cassure — forte conviction`);
@@ -589,9 +419,6 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
     points += 0; details.push(`✗ Volume ${volumeToUse.toFixed(1)}× la normale depuis la cassure — participation faible`);
   }
 
-  // 5. Faux breakouts précédents sur ce même niveau (max 4 pts) — un niveau déjà testé
-  // et refusé plusieurs fois dans la session inspire moins confiance qu'une cassure nette
-  // sur un niveau "vierge". Chaque tentative ratée réduit le score.
   if (persistence) {
     if (persistence.priorFakeouts === 0) {
       points += 4; details.push(`✓ Premier test de ce niveau dans la session — pas de tentative ratée avant`);
@@ -601,18 +428,15 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
       points += 0; details.push(`✗ ${persistence.priorFakeouts} tentatives ratées sur ce niveau avant celle-ci — niveau probablement épuisé`);
     }
   } else {
-    points += 2; // neutre si pas encore de breakout pour évaluer ça
+    points += 2;
   }
 
-  // 6. Structure pré-cassure : accumulation progressive ou spike soudain (max 4 pts) —
-  // un prix qui se rapprochait déjà du niveau sur plusieurs bougies avant de casser
-  // inspire plus confiance qu'un bond isolé d'une seule bougie sans élan préalable.
   if (persistence && persistence.structureType === 'accumulation') {
     points += 4; details.push(`✓ Accumulation progressive avant la cassure — mouvement construit, pas un spike isolé`);
   } else if (persistence && persistence.structureType === 'spike') {
     points += 1; details.push(`⚠ Cassure en spike soudain, sans accumulation progressive avant — plus sujet à un retour rapide`);
   } else {
-    points += 2; // pas assez de données pour trancher
+    points += 2;
   }
 
   const pct = points / maxPoints;
@@ -624,26 +448,13 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
   else if (pct >= 0.2) grade = 'D';
   else grade = 'E';
 
-  // Plafond dur : tant que le breakout n'a pas tenu au moins 10 minutes sans retour
-  // dans le range, le grade ne peut PAS dépasser B — peu importe un ADX ou un volume
-  // excellents. C'est directement la correction du problème observé en pratique : des
-  // breakouts notés A/S en quelques minutes qui se sont révélés être des fakeouts,
-  // parce que l'ADX/volume du moment ne suffisent pas à garantir qu'un breakout tient.
   if (notYetConfirmedByTime) {
     const gradeOrder = ['S', 'A', 'B', 'C', 'D', 'E'];
-    const currentIdx = gradeOrder.indexOf(grade);
-    const bIdx = gradeOrder.indexOf('B');
-    if (currentIdx < bIdx) grade = 'B';
+    if (gradeOrder.indexOf(grade) < gradeOrder.indexOf('B')) grade = 'B';
   }
-
-  // Plafond : tant qu'aucun breakout n'est confirmé (signal encore neutre — jamais cassé
-  // ou fakeout invalidé), le grade ne peut pas dépasser B — un bon contexte n'est qu'une
-  // anticipation, pas un signal validé par un vrai franchissement qui tient.
   if (isNeutral) {
     const gradeOrder = ['S', 'A', 'B', 'C', 'D', 'E'];
-    const currentIdx = gradeOrder.indexOf(grade);
-    const bIdx = gradeOrder.indexOf('B');
-    if (currentIdx < bIdx) grade = 'B';
+    if (gradeOrder.indexOf(grade) < gradeOrder.indexOf('B')) grade = 'B';
   }
 
   return { grade, points, maxPoints, details, isNeutral, isLong, persistence, notYetConfirmedByTime };
@@ -651,35 +462,25 @@ function computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, 
 
 function computeIndicators(data, orbMinutes) {
   const { timestamps, opens, highs, lows, closes, volumes } = data;
-
-  // Regrouper les bougies par jour de session (timezone du marché via meta.exchangeTimezoneName géré par Yahoo -> timestamps sont UTC epoch)
   const days = groupByTradingDay(timestamps);
   const lastDayKey = Object.keys(days).sort().pop();
   const lastDayIdx = days[lastDayKey];
 
-  // --- ORB : range des N premières minutes de la dernière session ---
   const candlesPerOrb = Math.max(1, Math.round(orbMinutes / 5));
   const orbIdx = lastDayIdx.slice(0, candlesPerOrb);
   const orbHigh = Math.max(...orbIdx.map(i => highs[i]));
   const orbLow = Math.min(...orbIdx.map(i => lows[i]));
 
-  // La toute dernière bougie de la liste est souvent encore EN FORMATION (Yahoo la
-  // renvoie avec des valeurs qui bougent en continu tant que les 5 minutes ne sont
-  // pas écoulées) — comparer un prix qui n'a pas fini de bouger à un niveau fixe rend
-  // le signal instable d'une seconde à l'autre sans aucun fondement réel. On distingue
-  // donc : lastIdx (dernière bougie CLOSE, sert au calcul du signal/score — stable) et
-  // liveIdx (bougie la plus récente, sert uniquement à l'affichage du prix "live").
   const CANDLE_INTERVAL_SEC = 5 * 60;
   const nowSec = Date.now() / 1000;
   const liveIdx = lastDayIdx[lastDayIdx.length - 1];
   const isLiveCandleOpen = (nowSec - timestamps[liveIdx]) < CANDLE_INTERVAL_SEC;
   const lastIdx = (isLiveCandleOpen && lastDayIdx.length > 1) ? lastDayIdx[lastDayIdx.length - 2] : liveIdx;
 
-  const lastClose = closes[lastIdx];       // référence pour signal/score — stable, bougie close
-  const livePrice = closes[liveIdx];        // prix affiché à l'utilisateur — bouge en continu
+  const lastClose = closes[lastIdx];
+  const livePrice = closes[liveIdx];
   const prevClose = closes[lastDayIdx[0]] ?? closes[0];
 
-  // --- VWAP (calculé sur la session du jour uniquement) ---
   let cumPV = 0, cumVol = 0;
   const vwapSeries = [];
   for (const i of lastDayIdx) {
@@ -690,19 +491,14 @@ function computeIndicators(data, orbMinutes) {
   }
   const currentVwap = vwapSeries[vwapSeries.length - 1];
 
-  // --- ATR (14 périodes, sur toutes les bougies dispo, proxy pour ATR journalier) ---
   const atr = computeATR(highs, lows, closes, 14);
-
-  // --- ADX (14 périodes) ---
   const adx = computeADX(highs, lows, closes, 14);
 
-  // --- Volume relatif : volume moyen des bougies ORB vs volume moyen historique sur même créneau ---
   const orbVolume = orbIdx.reduce((s, i) => s + volumes[i], 0);
   const avgVolumePerCandle = volumes.reduce((s, v) => s + v, 0) / volumes.length;
   const expectedOrbVolume = avgVolumePerCandle * candlesPerOrb;
   const relativeVolume = expectedOrbVolume > 0 ? orbVolume / expectedOrbVolume : 1;
 
-  // --- Signal ---
   const priceAboveVwap = lastClose > currentVwap;
   const brokeHigh = lastClose > orbHigh;
   const brokeLow = lastClose < orbLow;
@@ -713,86 +509,48 @@ function computeIndicators(data, orbMinutes) {
   let reasons = [];
 
   if (brokeHigh) {
-    if (priceAboveVwap) reasons.push('prix au-dessus du VWAP');
-    else reasons.push('⚠ prix sous le VWAP malgré le breakout');
-    if (strongAdx) reasons.push(`ADX ${adx.toFixed(0)} confirme la tendance`);
-    else reasons.push(`⚠ ADX ${adx.toFixed(0)} faible, tendance peu franche`);
-    if (strongVolume) reasons.push(`volume ${relativeVolume.toFixed(1)}x la normale`);
-    else reasons.push('⚠ volume insuffisant sur le breakout');
-
+    if (priceAboveVwap) reasons.push('prix au-dessus du VWAP'); else reasons.push('⚠ prix sous le VWAP malgré le breakout');
+    if (strongAdx) reasons.push(`ADX ${adx.toFixed(0)} confirme la tendance`); else reasons.push(`⚠ ADX ${adx.toFixed(0)} faible, tendance peu franche`);
+    if (strongVolume) reasons.push(`volume ${relativeVolume.toFixed(1)}x la normale`); else reasons.push('⚠ volume insuffisant sur le breakout');
     signal = (priceAboveVwap && strongAdx && strongVolume) ? 'bull' : 'neutral';
   } else if (brokeLow) {
-    if (!priceAboveVwap) reasons.push('prix sous le VWAP');
-    else reasons.push('⚠ prix au-dessus du VWAP malgré le breakdown');
-    if (strongAdx) reasons.push(`ADX ${adx.toFixed(0)} confirme la tendance`);
-    else reasons.push(`⚠ ADX ${adx.toFixed(0)} faible, tendance peu franche`);
-    if (strongVolume) reasons.push(`volume ${relativeVolume.toFixed(1)}x la normale`);
-    else reasons.push('⚠ volume insuffisant sur le breakdown');
-
+    if (!priceAboveVwap) reasons.push('prix sous le VWAP'); else reasons.push('⚠ prix au-dessus du VWAP malgré le breakdown');
+    if (strongAdx) reasons.push(`ADX ${adx.toFixed(0)} confirme la tendance`); else reasons.push(`⚠ ADX ${adx.toFixed(0)} faible, tendance peu franche`);
+    if (strongVolume) reasons.push(`volume ${relativeVolume.toFixed(1)}x la normale`); else reasons.push('⚠ volume insuffisant sur le breakdown');
     signal = (!priceAboveVwap && strongAdx && strongVolume) ? 'bear' : 'neutral';
   } else {
     reasons.push('prix encore dans le range d\'ouverture, pas de breakout');
   }
 
-  // --- Persistance du breakout dans le temps ---
-  // Un breakout qui vient de se produire et un breakout qui tient depuis 20 minutes
-  // sans retour dans le range ne se valent pas — le second est bien plus fiable.
-  // On regarde, parmi les bougies CLOSES depuis la sortie du range ORB, combien sont
-  // restées du bon côté du niveau, et si un retour dans le range (fakeout) a eu lieu.
   let persistence = null;
   if (signal === 'bull' || signal === 'bear') {
     const isLong = signal === 'bull';
     const level = isLong ? orbHigh : orbLow;
-
-    // Bougies post-ORB, closes uniquement (jusqu'à lastIdx inclus — pas la bougie live)
     const postOrbClosedIdx = lastDayIdx.filter(i => i > orbIdx[orbIdx.length - 1] && i <= lastIdx);
-
-    // Trouve la première bougie close qui a franchi le niveau (le vrai moment de cassure)
     const breakoutPointIdx = postOrbClosedIdx.find(i => isLong ? closes[i] > level : closes[i] < level);
 
     if (breakoutPointIdx != null) {
       const candlesSinceBreakout = postOrbClosedIdx.filter(i => i >= breakoutPointIdx);
       const minutesSinceBreakout = (candlesSinceBreakout.length - 1) * 5;
-
-      // Fakeout : une bougie close est repassée de l'autre côté du niveau après la cassure
       const hasReturnedInsideRange = candlesSinceBreakout.some(i => isLong ? closes[i] <= level : closes[i] >= level);
-
-      // Volume cumulé depuis la cassure vs volume moyen attendu sur la même durée
       const volumeSinceBreakout = candlesSinceBreakout.reduce((s, i) => s + volumes[i], 0);
       const expectedVolumeSinceBreakout = avgVolumePerCandle * candlesSinceBreakout.length;
       const relativeVolumeSinceBreakout = expectedVolumeSinceBreakout > 0 ? volumeSinceBreakout / expectedVolumeSinceBreakout : 1;
 
-      // --- Faux breakouts précédents sur ce même niveau ---
-      // Compte, parmi les bougies AVANT la cassure actuelle, combien de fois le prix a
-      // déjà dépassé ce niveau puis est revenu à l'intérieur (tentatives ratées). Plus il
-      // y en a eu, plus le niveau a déjà été "testé et refusé" — ce qui réduit la
-      // confiance dans le fait que CETTE cassure-ci tienne mieux que les précédentes.
       const candlesBeforeBreakout = postOrbClosedIdx.filter(i => i < breakoutPointIdx);
       let priorFakeouts = 0;
       let wasOutsideRange = false;
       for (const i of candlesBeforeBreakout) {
         const isOutsideNow = isLong ? closes[i] > level : closes[i] < level;
-        if (isOutsideNow && !wasOutsideRange) {
-          // vient de sortir du range — potentiel début de tentative
-          wasOutsideRange = true;
-        } else if (!isOutsideNow && wasOutsideRange) {
-          // était sorti, est revenu à l'intérieur -> une tentative ratée de plus
-          priorFakeouts++;
-          wasOutsideRange = false;
-        }
+        if (isOutsideNow && !wasOutsideRange) { wasOutsideRange = true; }
+        else if (!isOutsideNow && wasOutsideRange) { priorFakeouts++; wasOutsideRange = false; }
       }
 
-      // --- Structure pré-cassure : accumulation progressive ou spike soudain ? ---
-      // Regarde les quelques bougies juste avant la cassure définitive : si le prix se
-      // rapprochait déjà progressivement du niveau (plusieurs bougies avec des sommets/creux
-      // de plus en plus proches), c'est une accumulation — plus fiable qu'un bond isolé
-      // d'une seule bougie qui n'avait pas d'élan progressif avant.
-      const lookback = 3; // nombre de bougies avant la cassure à examiner
+      const lookback = 3;
       const preBreakoutIdx = postOrbClosedIdx.filter(i => i < breakoutPointIdx).slice(-lookback);
       let structureType = 'insufficient_data';
       if (preBreakoutIdx.length >= 2) {
         const relevantPrices = isLong ? preBreakoutIdx.map(i => highs[i]) : preBreakoutIdx.map(i => lows[i]);
-        // Progression monotone vers le niveau = accumulation ; sinon = mouvement erratique/spike
         let isProgressive = true;
         for (let k = 1; k < relevantPrices.length; k++) {
           const gettingCloser = isLong ? relevantPrices[k] >= relevantPrices[k - 1] : relevantPrices[k] <= relevantPrices[k - 1];
@@ -801,17 +559,8 @@ function computeIndicators(data, orbMinutes) {
         structureType = isProgressive ? 'accumulation' : 'spike';
       }
 
-      persistence = {
-        minutesSinceBreakout,
-        candlesHeld: candlesSinceBreakout.length,
-        hasReturnedInsideRange,
-        relativeVolumeSinceBreakout,
-        priorFakeouts,
-        structureType,
-      };
+      persistence = { minutesSinceBreakout, candlesHeld: candlesSinceBreakout.length, hasReturnedInsideRange, relativeVolumeSinceBreakout, priorFakeouts, structureType };
 
-      // Fakeout confirmé : le niveau n'a pas tenu, le signal est invalidé même si la
-      // dernière bougie close est repassée du bon côté (mouvement erratique, pas fiable)
       if (hasReturnedInsideRange) {
         signal = 'neutral';
         reasons = ['⚠ Fakeout détecté — le prix est repassé dans le range ORB après avoir cassé, signal invalidé'];
@@ -819,24 +568,17 @@ function computeIndicators(data, orbMinutes) {
     }
   }
 
-  // --- Niveaux de trade (long / short) ---
-  // Règle : stop à l'opposé du range ORB (niveau structurel — c'est justement le niveau
-  // que le prix vient de casser), mais plafonné à 1.5x ATR pour éviter un risque démesuré
-  // les jours où le range ORB est anormalement large. Target en ratio 2:1 (rapport
-  // risque/reward le plus robuste empiriquement pour ce type de stratégie).
   const RR_RATIO = 2;
   const MAX_STOP_ATR_MULT = 1.5;
   const orbRange = orbHigh - orbLow;
   const maxStopDistance = atr * MAX_STOP_ATR_MULT;
 
-  // LONG : entrée à l'ORB High (niveau de breakout), stop sous l'ORB Low
   const longEntry = orbHigh;
   const longStopDistance = Math.min(orbRange, maxStopDistance);
   const longStop = longEntry - longStopDistance;
   const longTarget = longEntry + longStopDistance * RR_RATIO;
-  const longStopCapped = longStopDistance < orbRange; // true si l'ATR a limité le stop
+  const longStopCapped = longStopDistance < orbRange;
 
-  // SHORT : entrée à l'ORB Low, stop au-dessus de l'ORB High
   const shortEntry = orbLow;
   const shortStopDistance = Math.min(orbRange, maxStopDistance);
   const shortStop = shortEntry + shortStopDistance;
@@ -848,125 +590,55 @@ function computeIndicators(data, orbMinutes) {
     short: { entry: shortEntry, stop: shortStop, target: shortTarget, stopCapped: shortStopCapped, rr: RR_RATIO },
   };
 
-  // --- Score de qualité de setup (pour décider si un ordre limite est pertinent) ---
-  // IMPORTANT : ceci n'est PAS une probabilité statistique de réussite — juste un score
-  // de qualité basé sur des règles connues (distance au niveau, confluence des filtres,
-  // qualité du range, force de tendance, volume). Un "S" ne garantit rien ; ça veut dire
-  // que le setup a les caractéristiques d'un bon setup ORB sur le papier.
-  const setupScore = computeSetupScore({
-    signal, lastClose, orbHigh, orbLow, orbRange, atr, adx, relativeVolume,
-    priceAboveVwap, persistence,
-  });
+  const setupScore = computeSetupScore({ signal, lastClose, orbHigh, orbLow, orbRange, atr, adx, relativeVolume, priceAboveVwap, persistence });
 
-  return {
-    orbHigh, orbLow, orbVolume, candlesPerOrb,
-    lastClose, prevClose, currentVwap, vwapSeries,
-    livePrice, isLiveCandleOpen,
-    atr, adx, relativeVolume,
-    signal, reasons,
-    lastDayIdx,
-    tradeLevels, setupScore,
-  };
+  return { orbHigh, orbLow, orbVolume, candlesPerOrb, lastClose, prevClose, currentVwap, vwapSeries, livePrice, isLiveCandleOpen, atr, adx, relativeVolume, signal, reasons, lastDayIdx, tradeLevels, setupScore };
 }
 
-// ------------------------------------------------------------
-// HISTORIQUE DES SIGNAUX — persistant, pour comparer jour après jour
-// ------------------------------------------------------------
 const HISTORY_KEY = 'orb-scanner-history';
-const HISTORY_MAX_ENTRIES = 500; // évite une croissance illimitée du localStorage
+const HISTORY_MAX_ENTRIES = 500;
 
 function loadHistory() {
   try {
     const raw = localStorage.getItem(HISTORY_KEY);
     const parsed = raw ? JSON.parse(raw) : [];
     return parsed.map(migrateHistoryEntry).filter(Boolean);
-  } catch {
-    return [];
-  }
+  } catch { return []; }
 }
 
-// Convertit une entrée de l'ancien format automatique (dedupeKey/signal/_outcome,
-// créé par la version précédente du site qui enregistrait les breakouts tout seule)
-// vers le nouveau format manuel (id/direction/outcome). Les entrées déjà au bon
-// format passent inchangées. Une entrée illisible est écartée plutôt que de planter
-// tout l'affichage du journal.
 function migrateHistoryEntry(h) {
   if (!h || typeof h !== 'object') return null;
-
-  // Déjà au nouveau format
   if (h.id && h.direction && h.outcome) return h;
-
-  // Ancien format automatique : signal ('bull'/'bear') + _outcome ('win'/'loss'/'pending')
   const direction = h.direction || (h.signal === 'bull' ? 'long' : h.signal === 'bear' ? 'short' : null);
-  if (!direction || typeof h.entry !== 'number' || typeof h.stop !== 'number' || typeof h.target !== 'number') {
-    return null; // entrée trop incomplète pour être récupérée proprement
-  }
-
+  if (!direction || typeof h.entry !== 'number' || typeof h.stop !== 'number' || typeof h.target !== 'number') return null;
   const outcomeMap = { win: 'win', loss: 'loss', pending: 'pending', breakeven: 'breakeven' };
   const outcome = outcomeMap[h.outcome] || outcomeMap[h._outcome] || 'pending';
-
   return {
     id: h.id || h.dedupeKey || `${h.ticker || 'UNKNOWN'}-${h.timestamp || Date.now()}`,
-    ticker: h.ticker || '?',
-    date: h.date || new Date().toISOString().slice(0, 10),
-    timestamp: h.timestamp || Date.now(),
-    direction,
-    orbMinutes: h.orbMinutes || 15,
+    ticker: h.ticker || '?', date: h.date || new Date().toISOString().slice(0, 10),
+    timestamp: h.timestamp || Date.now(), direction, orbMinutes: h.orbMinutes || 15,
     entry: h.entry, stop: h.stop, target: h.target,
-    positionValue: h.positionValue ?? null,
-    shares: h.shares ?? null,
-    outcome,
+    positionValue: h.positionValue ?? null, shares: h.shares ?? null, outcome,
   };
 }
 
-function saveHistory(history) {
-  try {
-    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
-  } catch {
-    // quota dépassé ou navigation privée — on continue sans persister
-  }
-}
+function saveHistory(history) { try { localStorage.setItem(HISTORY_KEY, JSON.stringify(history)); } catch {} }
 
-// Ajoute manuellement un trade au journal de suivi — appelé uniquement quand tu cliques
-// "+ Ajouter au suivi" sur une carte Long/Short. Pas de dédoublonnage automatique : si tu
-// cliques plusieurs fois, ça ajoute plusieurs lignes (au cas où tu prends le même ticker
-// à deux reprises dans la même journée, ce qui est ton choix, pas une erreur à filtrer).
 function addTradeToHistory({ ticker, direction, entry, stop, target, positionValue, shares, orbMinutes, grade }) {
   const history = loadHistory();
   const today = new Date().toISOString().slice(0, 10);
-
-  history.unshift({
-    id: `${ticker}-${Date.now()}`,
-    ticker,
-    date: today,
-    timestamp: Date.now(),
-    direction, // 'long' ou 'short'
-    orbMinutes,
-    entry, stop, target,
-    positionValue: positionValue ?? null,
-    shares: shares ?? null,
-    grade: grade || null, // score S/A/B/C/D/E figé au moment où le trade a été ajouté au suivi
-    outcome: 'pending', // 'pending' | 'win' | 'loss' | 'breakeven' — modifiable manuellement dans l'historique
-  });
-
+  history.unshift({ id: `${ticker}-${Date.now()}`, ticker, date: today, timestamp: Date.now(), direction, orbMinutes, entry, stop, target, positionValue: positionValue ?? null, shares: shares ?? null, grade: grade || null, outcome: 'pending' });
   saveHistory(history.slice(0, HISTORY_MAX_ENTRIES));
 }
 
-// Calcule le PnL en $ d'un trade selon son résultat :
-// - win  : on suppose le take-profit touché intégralement
-// - loss : on suppose le stop-loss touché intégralement
-// - breakeven (clôture manuelle) : utilise le prix de sortie réellement fourni
 function computeTradePnl(trade, outcome, exitPrice) {
-  if (trade.shares == null) return null; // pas de taille de position connue, PnL non calculable
-
+  if (trade.shares == null) return null;
   const isLong = trade.direction === 'long';
   let exit;
   if (outcome === 'win') exit = trade.target;
   else if (outcome === 'loss') exit = trade.stop;
-  else exit = exitPrice; // breakeven / clôture manuelle : prix fourni par l'utilisateur
-
+  else exit = exitPrice;
   if (exit == null || isNaN(exit)) return null;
-
   const pnl = isLong ? (exit - trade.entry) * trade.shares : (trade.entry - exit) * trade.shares;
   return { pnl, exit };
 }
@@ -975,55 +647,30 @@ function updateTradeOutcome(id, outcome, exitPrice) {
   const history = loadHistory();
   const trade = history.find(h => h.id === id);
   if (!trade) return;
-
   trade.outcome = outcome;
-
   const result = computeTradePnl(trade, outcome, exitPrice);
-  if (result) {
-    trade.pnl = result.pnl;
-    trade.exitPrice = result.exit;
-  } else {
-    trade.pnl = null;
-    trade.exitPrice = null;
-  }
-
+  if (result) { trade.pnl = result.pnl; trade.exitPrice = result.exit; }
+  else { trade.pnl = null; trade.exitPrice = null; }
   saveHistory(history);
 }
 
-function deleteTradeFromHistory(id) {
-  const history = loadHistory().filter(h => h.id !== id);
-  saveHistory(history);
-}
+function deleteTradeFromHistory(id) { saveHistory(loadHistory().filter(h => h.id !== id)); }
 
 function renderHistoryPage() {
   const history = loadHistory();
-
   if (history.length === 0) {
-    els.content.innerHTML = `
-      ${renderBackToScanIfNeeded()}
-      <div class="empty-state">
-        <div class="glyph">◷</div>
-        <p>Ton journal de suivi est vide. Depuis une carte Long ou Short, clique "+ Ajouter au suivi" pour enregistrer un trade que tu as réellement pris.</p>
-      </div>
-    `;
+    els.content.innerHTML = `${renderBackToScanIfNeeded()}<div class="empty-state"><div class="glyph">◷</div><p>Ton journal de suivi est vide. Depuis une carte Long ou Short, clique "+ Ajouter au suivi" pour enregistrer un trade que tu as réellement pris.</p></div>`;
     return;
   }
-
   const wins = history.filter(h => h.outcome === 'win').length;
   const losses = history.filter(h => h.outcome === 'loss').length;
   const breakeven = history.filter(h => h.outcome === 'breakeven').length;
   const pending = history.filter(h => h.outcome === 'pending').length;
   const resolved = wins + losses;
   const winrate = resolved > 0 ? ((wins / resolved) * 100).toFixed(0) : '—';
-
-  // PnL global — somme des trades dont le PnL a pu être calculé (nécessite un montant
-  // de position connu, donc balance renseignée au moment de l'ajout au suivi).
   const tradesWithPnl = history.filter(h => h.pnl != null);
   const totalPnl = tradesWithPnl.reduce((sum, h) => sum + h.pnl, 0);
   const pnlColor = totalPnl > 0 ? 'var(--bull)' : totalPnl < 0 ? 'var(--bear)' : 'var(--text-dim)';
-
-  // Résumé winrate par grade — utile pour vérifier si les meilleurs scores
-  // performent effectivement mieux sur la durée, une fois assez de trades enregistrés.
   const grades = ['S', 'A', 'B', 'C', 'D', 'E'];
   const gradeStatsHtml = grades.map(g => {
     const tradesForGrade = history.filter(h => h.grade === g && (h.outcome === 'win' || h.outcome === 'loss'));
@@ -1034,47 +681,14 @@ function renderHistoryPage() {
   }).filter(Boolean).join('');
 
   const rows = history.map(h => {
-    const outcomeMeta = {
-      win: { label: 'Gagné', cls: 'tag-good' },
-      loss: { label: 'Perdu', cls: 'tag-bad' },
-      breakeven: { label: 'Clôturé manuel', cls: 'tag-warn' },
-      pending: { label: 'En cours', cls: 'tag-warn' },
-    }[h.outcome];
-
+    const outcomeMeta = { win: { label: 'Gagné', cls: 'tag-good' }, loss: { label: 'Perdu', cls: 'tag-bad' }, breakeven: { label: 'Clôturé manuel', cls: 'tag-warn' }, pending: { label: 'En cours', cls: 'tag-warn' } }[h.outcome];
     const dirLabel = h.direction === 'long' ? '▲ Long' : '▼ Short';
     const dirColor = h.direction === 'long' ? 'var(--bull)' : 'var(--bear)';
-
-    const outcomeButtons = `
-      <div style="display:flex; gap:4px; margin-top:4px;">
-        <button class="outcome-btn" data-id="${h.id}" data-outcome="win" title="Marquer gagné" style="border-color:var(--bull); color:var(--bull);">✓</button>
-        <button class="outcome-btn" data-id="${h.id}" data-outcome="loss" title="Marquer perdu" style="border-color:var(--bear); color:var(--bear);">✗</button>
-        <button class="outcome-btn" data-id="${h.id}" data-outcome="breakeven" title="Clôturé manuellement (demande le prix de sortie)" style="border-color:var(--warn); color:var(--warn);">=</button>
-        <button class="outcome-btn" data-id="${h.id}" data-delete="1" title="Supprimer" style="border-color:var(--text-dim); color:var(--text-dim);">🗑</button>
-      </div>`;
-
+    const outcomeButtons = `<div style="display:flex; gap:4px; margin-top:4px;"><button class="outcome-btn" data-id="${h.id}" data-outcome="win" title="Marquer gagné" style="border-color:var(--bull); color:var(--bull);">✓</button><button class="outcome-btn" data-id="${h.id}" data-outcome="loss" title="Marquer perdu" style="border-color:var(--bear); color:var(--bear);">✗</button><button class="outcome-btn" data-id="${h.id}" data-outcome="breakeven" title="Clôturé manuellement" style="border-color:var(--warn); color:var(--warn);">=</button><button class="outcome-btn" data-id="${h.id}" data-delete="1" title="Supprimer" style="border-color:var(--text-dim); color:var(--text-dim);">🗑</button></div>`;
     const gradeColors = { S: 'var(--bull)', A: 'var(--bull)', B: 'var(--warn)', C: 'var(--warn)', D: 'var(--bear)', E: 'var(--bear)' };
     const gradeCell = h.grade ? `<span style="font-weight:700; color:${gradeColors[h.grade] || 'var(--text-dim)'}; font-family:var(--mono);">${h.grade}</span>` : '<span style="color:var(--text-dim);">—</span>';
-    const pnlCell = h.pnl != null
-      ? `<span style="color:${h.pnl >= 0 ? 'var(--bull)' : 'var(--bear)'}; font-weight:700;">${h.pnl >= 0 ? '+' : ''}${h.pnl.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$</span>`
-      : '<span style="color:var(--text-dim);">—</span>';
-
-    return `
-      <tr>
-        <td class="scan-ticker">${h.ticker}</td>
-        <td style="font-family:var(--sans); font-size:12px; color:var(--text-dim)">${h.date}</td>
-        <td style="color:${dirColor}; font-weight:600;">${dirLabel}</td>
-        <td>${gradeCell}</td>
-        <td>${h.entry.toFixed(2)}</td>
-        <td style="color:var(--bear)">${h.stop.toFixed(2)}</td>
-        <td style="color:var(--bull)">${h.target.toFixed(2)}</td>
-        <td>${h.positionValue != null ? h.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 }) + '$' : '—'}</td>
-        <td>${pnlCell}</td>
-        <td>
-          <span class="indicator-tag ${outcomeMeta.cls}">${outcomeMeta.label}</span>
-          ${outcomeButtons}
-        </td>
-      </tr>
-    `;
+    const pnlCell = h.pnl != null ? `<span style="color:${h.pnl >= 0 ? 'var(--bull)' : 'var(--bear)'}; font-weight:700;">${h.pnl >= 0 ? '+' : ''}${h.pnl.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$</span>` : '<span style="color:var(--text-dim);">—</span>';
+    return `<tr><td class="scan-ticker">${h.ticker}</td><td style="font-family:var(--sans); font-size:12px; color:var(--text-dim)">${h.date}</td><td style="color:${dirColor}; font-weight:600;">${dirLabel}</td><td>${gradeCell}</td><td>${h.entry.toFixed(2)}</td><td style="color:var(--bear)">${h.stop.toFixed(2)}</td><td style="color:var(--bull)">${h.target.toFixed(2)}</td><td>${h.positionValue != null ? h.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 }) + '$' : '—'}</td><td>${pnlCell}</td><td><span class="indicator-tag ${outcomeMeta.cls}">${outcomeMeta.label}</span>${outcomeButtons}</td></tr>`;
   }).join('');
 
   els.content.innerHTML = `
@@ -1083,51 +697,33 @@ function renderHistoryPage() {
       <div class="ticker-id" style="font-size:20px;">Journal de suivi</div>
       ${tradesWithPnl.length > 0 ? `<div class="ticker-price" style="color:${pnlColor}; font-size:22px;">${totalPnl >= 0 ? '+' : ''}${totalPnl.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$</div>` : ''}
     </div>
-    ${tradesWithPnl.length < history.filter(h => h.outcome !== 'pending').length ? `<div style="font-size:11px; color:var(--text-dim); font-family:var(--sans); margin-bottom:12px;">PnL calculé sur ${tradesWithPnl.length} trade${tradesWithPnl.length > 1 ? 's' : ''} résolu${tradesWithPnl.length > 1 ? 's' : ''} avec montant connu — les trades sans balance renseignée au moment de l'ajout ne comptent pas dans ce total</div>` : ''}
-
+    ${tradesWithPnl.length < history.filter(h => h.outcome !== 'pending').length ? `<div style="font-size:11px; color:var(--text-dim); font-family:var(--sans); margin-bottom:12px;">PnL calculé sur ${tradesWithPnl.length} trade${tradesWithPnl.length > 1 ? 's' : ''} résolu${tradesWithPnl.length > 1 ? 's' : ''} avec montant connu</div>` : ''}
     <div class="signal-banner signal-neutral" style="margin-bottom:20px;">
       <span>${history.length} trade${history.length > 1 ? 's' : ''} enregistré${history.length > 1 ? 's' : ''}</span>
       <span class="signal-detail">${wins} gagné${wins > 1 ? 's' : ''} · ${losses} perdu${losses > 1 ? 's' : ''} · ${breakeven} clôturé${breakeven > 1 ? 's' : ''} manuellement · ${pending} en cours${resolved > 0 ? ` · winrate: ${winrate}%` : ''}</span>
     </div>
-
     ${gradeStatsHtml ? `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:16px;">Winrate par grade : ${gradeStatsHtml}</div>` : ''}
-
     <table class="scan-table">
-      <thead>
-        <tr>
-          <th>Ticker</th><th>Date</th><th>Direction</th><th>Grade</th><th>Entrée</th><th>Stop</th><th>Target</th><th>Montant</th><th>PnL</th><th>Résultat</th>
-        </tr>
-      </thead>
+      <thead><tr><th>Ticker</th><th>Date</th><th>Direction</th><th>Grade</th><th>Entrée</th><th>Stop</th><th>Target</th><th>Montant</th><th>PnL</th><th>Résultat</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-
-    <div style="margin-top:16px;">
-      <button class="back-to-scan" id="clear-history-btn">Effacer tout le journal</button>
-    </div>
+    <div style="margin-top:16px;"><button class="back-to-scan" id="clear-history-btn">Effacer tout le journal</button></div>
   `;
 
   document.getElementById('clear-history-btn')?.addEventListener('click', () => {
-    if (confirm('Effacer tout le journal de suivi ? Cette action est irréversible.')) {
-      saveHistory([]);
-      renderHistoryPage();
-    }
+    if (confirm('Effacer tout le journal de suivi ? Cette action est irréversible.')) { saveHistory([]); renderHistoryPage(); }
   });
-
   document.getElementById('back-to-scan-btn-hist')?.addEventListener('click', runScanAll);
-
   els.content.querySelectorAll('.outcome-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      if (btn.dataset.delete) {
-        deleteTradeFromHistory(btn.dataset.id);
-      } else if (btn.dataset.outcome === 'breakeven') {
-        const input = prompt('À quel prix as-tu clôturé ce trade ? (ni TP ni SL touché — clôture manuelle)');
-        if (input === null) return; // annulé
+      if (btn.dataset.delete) { deleteTradeFromHistory(btn.dataset.id); }
+      else if (btn.dataset.outcome === 'breakeven') {
+        const input = prompt('À quel prix as-tu clôturé ce trade ?');
+        if (input === null) return;
         const exitPrice = parseFloat(input.replace(',', '.'));
         if (isNaN(exitPrice) || exitPrice <= 0) { alert('Prix invalide.'); return; }
         updateTradeOutcome(btn.dataset.id, 'breakeven', exitPrice);
-      } else {
-        updateTradeOutcome(btn.dataset.id, btn.dataset.outcome);
-      }
+      } else { updateTradeOutcome(btn.dataset.id, btn.dataset.outcome); }
       renderHistoryPage();
     });
   });
@@ -1151,12 +747,7 @@ function groupByTradingDay(timestamps) {
 function computeATR(highs, lows, closes, period) {
   const trs = [];
   for (let i = 1; i < highs.length; i++) {
-    const tr = Math.max(
-      highs[i] - lows[i],
-      Math.abs(highs[i] - closes[i - 1]),
-      Math.abs(lows[i] - closes[i - 1])
-    );
-    trs.push(tr);
+    trs.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
   }
   const slice = trs.slice(-period);
   return slice.reduce((s, v) => s + v, 0) / slice.length;
@@ -1165,35 +756,24 @@ function computeATR(highs, lows, closes, period) {
 function computeADX(highs, lows, closes, period) {
   const len = highs.length;
   if (len < period * 2) return 0;
-
   const plusDM = [], minusDM = [], tr = [];
   for (let i = 1; i < len; i++) {
     const upMove = highs[i] - highs[i - 1];
     const downMove = lows[i - 1] - lows[i];
     plusDM.push((upMove > downMove && upMove > 0) ? upMove : 0);
     minusDM.push((downMove > upMove && downMove > 0) ? downMove : 0);
-    tr.push(Math.max(
-      highs[i] - lows[i],
-      Math.abs(highs[i] - closes[i - 1]),
-      Math.abs(lows[i] - closes[i - 1])
-    ));
+    tr.push(Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1])));
   }
-
   const smooth = (arr, period) => {
     const out = [];
     let sum = arr.slice(0, period).reduce((s, v) => s + v, 0);
     out.push(sum);
-    for (let i = period; i < arr.length; i++) {
-      sum = sum - (sum / period) + arr[i];
-      out.push(sum);
-    }
+    for (let i = period; i < arr.length; i++) { sum = sum - (sum / period) + arr[i]; out.push(sum); }
     return out;
   };
-
   const smoothTR = smooth(tr, period);
   const smoothPlusDM = smooth(plusDM, period);
   const smoothMinusDM = smooth(minusDM, period);
-
   const dx = [];
   for (let i = 0; i < smoothTR.length; i++) {
     const plusDI = 100 * (smoothPlusDM[i] / smoothTR[i]);
@@ -1201,33 +781,22 @@ function computeADX(highs, lows, closes, period) {
     const sum = plusDI + minusDI;
     dx.push(sum > 0 ? 100 * Math.abs(plusDI - minusDI) / sum : 0);
   }
-
   const adxSlice = dx.slice(-period);
   return adxSlice.reduce((s, v) => s + v, 0) / adxSlice.length;
 }
 
-// ------------------------------------------------------------
-// RENDU
-// ------------------------------------------------------------
 function setLoading(ticker) {
-  els.content.innerHTML = `
-    <div class="loading-state">
-      <span class="loading-dot"></span>Récupération des données pour ${ticker}...
-    </div>`;
+  els.content.innerHTML = `<div class="loading-state"><span class="loading-dot"></span>Récupération des données pour ${ticker}...</div>`;
 }
 
 function setError(ticker, message) {
-  els.content.innerHTML = `
-    <div class="error-state">
-      Erreur sur ${ticker} : ${escapeHtml(message)}
-    </div>`;
+  els.content.innerHTML = `<div class="error-state">Erreur sur ${ticker} : ${escapeHtml(message)}</div>`;
 }
 
 function renderResults(ticker, data, a, orbMinutes) {
   const change = a.lastClose - a.prevClose;
   const changePct = (change / a.prevClose) * 100;
   const isUp = change >= 0;
-
   const signalConfig = {
     bull: { icon: '▲', label: 'BREAKOUT HAUSSIER CONFIRMÉ', cls: 'signal-bull' },
     bear: { icon: '▼', label: 'BREAKOUT BAISSIER CONFIRMÉ', cls: 'signal-bear' },
@@ -1240,18 +809,14 @@ function renderResults(ticker, data, a, orbMinutes) {
       <div style="display:flex; align-items:center; gap:14px;">
         <div class="ticker-id">${ticker}</div>
         <div class="ticker-price">${a.lastClose.toFixed(2)}</div>
-        <div class="ticker-change ${isUp ? 'up-bg' : 'down-bg'}">
-          ${isUp ? '+' : ''}${change.toFixed(2)} (${isUp ? '+' : ''}${changePct.toFixed(2)}%)
-        </div>
+        <div class="ticker-change ${isUp ? 'up-bg' : 'down-bg'}">${isUp ? '+' : ''}${change.toFixed(2)} (${isUp ? '+' : ''}${changePct.toFixed(2)}%)</div>
       </div>
     </div>
-
     <div class="signal-banner ${signalConfig.cls}">
       <span class="signal-icon">${signalConfig.icon}</span>
       <span>${signalConfig.label}</span>
       <span class="signal-detail">${a.reasons.join(' · ')}</span>
     </div>
-
     <div class="grid">
       <div class="chart-panel">
         <div id="chart-container"></div>
@@ -1261,7 +826,6 @@ function renderResults(ticker, data, a, orbMinutes) {
           <div class="legend-item"><span class="legend-swatch" style="background:#C4554A"></span>ORB Low</div>
         </div>
       </div>
-
       <div class="indicators-panel">
         ${renderIndicatorCard('ORB Range', `${a.orbLow.toFixed(2)} – ${a.orbHigh.toFixed(2)}`, '', `sur les ${orbMinutes} premières min`, null)}
         ${renderIndicatorCard('VWAP', a.currentVwap.toFixed(2), '', a.lastClose > a.currentVwap ? 'Prix au-dessus (biais haussier)' : 'Prix en-dessous (biais baissier)', a.lastClose > a.currentVwap ? 'good' : 'bad')}
@@ -1270,32 +834,22 @@ function renderResults(ticker, data, a, orbMinutes) {
         ${renderIndicatorCard('Volume relatif', `${a.relativeVolume.toFixed(2)}x`, '', a.relativeVolume > 1.2 ? 'Volume élevé — signal fiable' : 'Volume faible — risque de fakeout', a.relativeVolume > 1.2 ? 'good' : 'bad')}
       </div>
     </div>
-
     ${renderSetupScore(a)}
     ${renderTradeLevels(a, ticker, orbMinutes)}
   `;
 
   renderChart(data, a);
 
-  document.getElementById('back-to-scan-btn')?.addEventListener('click', () => {
-    const orbMinutes = parseInt(els.orbWindow.value, 10);
-    // Ré-affiche le dernier scan sans refaire les requêtes réseau si possible :
-    // on relance simplement un scan complet (plus simple et toujours à jour).
-    runScanAll();
-  });
+  document.getElementById('back-to-scan-btn')?.addEventListener('click', () => { runScanAll(); });
 
   els.content.querySelectorAll('.add-to-history-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       addTradeToHistory({
-        ticker: btn.dataset.ticker,
-        direction: btn.dataset.direction,
-        entry: parseFloat(btn.dataset.entry),
-        stop: parseFloat(btn.dataset.stop),
-        target: parseFloat(btn.dataset.target),
+        ticker: btn.dataset.ticker, direction: btn.dataset.direction,
+        entry: parseFloat(btn.dataset.entry), stop: parseFloat(btn.dataset.stop), target: parseFloat(btn.dataset.target),
         positionValue: btn.dataset.position ? parseFloat(btn.dataset.position) : null,
         shares: btn.dataset.shares ? parseFloat(btn.dataset.shares) : null,
-        orbMinutes: parseInt(btn.dataset.orb, 10),
-        grade: btn.dataset.grade,
+        orbMinutes: parseInt(btn.dataset.orb, 10), grade: btn.dataset.grade,
       });
       btn.textContent = '✓ Ajouté au suivi';
       btn.disabled = true;
@@ -1305,72 +859,37 @@ function renderResults(ticker, data, a, orbMinutes) {
 
 function renderSetupScore(a) {
   const s = a.setupScore;
-
-  const gradeColors = {
-    S: 'var(--bull)', A: 'var(--bull)', B: 'var(--warn)',
-    C: 'var(--warn)', D: 'var(--bear)', E: 'var(--bear)',
-  };
+  const gradeColors = { S: 'var(--bull)', A: 'var(--bull)', B: 'var(--warn)', C: 'var(--warn)', D: 'var(--bear)', E: 'var(--bear)' };
   const gradeVerdict = {
     S: 'Setup excellent — ordre limite proche du niveau a du sens',
     A: 'Bon setup — ordre limite raisonnable',
     B: s.isNeutral ? 'En approche — surveille, mais pas encore de breakout confirmé' : 'Setup correct mais avec réserves — regarde les détails',
-    C: 'Setup moyen — sois prudent',
-    D: 'Setup faible — probablement à éviter',
-    E: 'Setup très faible — à éviter',
+    C: 'Setup moyen — sois prudent', D: 'Setup faible — probablement à éviter', E: 'Setup très faible — à éviter',
   };
   const color = gradeColors[s.grade];
-  const cardTitle = s.isNeutral
-    ? `Score indicatif — pas encore de breakout confirmé (côté ${s.isLong ? 'ORB High' : 'ORB Low'})`
-    : 'Qualité de setup (ordre limite) — breakout confirmé';
-
+  const cardTitle = s.isNeutral ? `Score indicatif — pas encore de breakout confirmé (côté ${s.isLong ? 'ORB High' : 'ORB Low'})` : 'Qualité de setup (ordre limite) — breakout confirmé';
   const detailsHtml = s.details.map(d => `<div style="padding:4px 0; font-size:12px; color:var(--text);">${escapeHtml(d)}</div>`).join('');
-  const persistenceBadge = (s.persistence && !s.isNeutral && !s.notYetConfirmedByTime)
-    ? `<div style="font-size:11px; color:var(--vwap); font-family:var(--mono); margin-top:4px;">⏱ Niveau tenu depuis ${s.persistence.minutesSinceBreakout} min — le score se renforce si ça continue</div>`
-    : '';
-  const capBadge = (s.notYetConfirmedByTime && !s.isNeutral)
-    ? `<div style="font-size:11px; color:var(--warn); font-family:var(--mono); margin-top:4px;">⏳ Grade plafonné à B — breakout trop récent, attends qu'il tienne au moins 10 min avant d'agir</div>`
-    : '';
-
-  return `
-    <div class="indicator-card" style="margin-top:20px; border-color:${color}; ${s.isNeutral ? 'border-style:dashed;' : ''}">
-      <div style="display:flex; align-items:center; gap:16px; margin-bottom:10px;">
-        <div style="font-family:var(--mono); font-size:42px; font-weight:700; color:${color}; line-height:1;">${s.grade}</div>
-        <div>
-          <div class="indicator-label" style="margin-bottom:2px;">${cardTitle}</div>
-          <div style="font-size:13px; font-weight:600; color:var(--text-bright);">${gradeVerdict[s.grade]}</div>
-          <div style="font-size:11px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;">${s.points}/${s.maxPoints} points — score de règles, pas une probabilité statistique</div>
-          ${persistenceBadge}
-          ${capBadge}
-        </div>
-      </div>
-      ${detailsHtml}
-    </div>
-  `;
+  const persistenceBadge = (s.persistence && !s.isNeutral && !s.notYetConfirmedByTime) ? `<div style="font-size:11px; color:var(--vwap); font-family:var(--mono); margin-top:4px;">⏱ Niveau tenu depuis ${s.persistence.minutesSinceBreakout} min — le score se renforce si ça continue</div>` : '';
+  const capBadge = (s.notYetConfirmedByTime && !s.isNeutral) ? `<div style="font-size:11px; color:var(--warn); font-family:var(--mono); margin-top:4px;">⏳ Grade plafonné à B — breakout trop récent, attends qu'il tienne au moins 10 min avant d'agir</div>` : '';
+  return `<div class="indicator-card" style="margin-top:20px; border-color:${color}; ${s.isNeutral ? 'border-style:dashed;' : ''}"><div style="display:flex; align-items:center; gap:16px; margin-bottom:10px;"><div style="font-family:var(--mono); font-size:42px; font-weight:700; color:${color}; line-height:1;">${s.grade}</div><div><div class="indicator-label" style="margin-bottom:2px;">${cardTitle}</div><div style="font-size:13px; font-weight:600; color:var(--text-bright);">${gradeVerdict[s.grade]}</div><div style="font-size:11px; color:var(--text-dim); font-family:var(--mono); margin-top:2px;">${s.points}/${s.maxPoints} points — score de règles, pas une probabilité statistique</div>${persistenceBadge}${capBadge}</div></div>${detailsHtml}</div>`;
 }
 
 function renderTradeLevels(a, ticker, orbMinutes) {
   const { long, short } = a.tradeLevels;
   const isLongActive = a.signal === 'bull';
   const isShortActive = a.signal === 'bear';
-
   const riskLong = long.entry - long.stop;
   const rewardLong = long.target - long.entry;
   const riskShort = short.stop - short.entry;
   const rewardShort = short.entry - short.target;
-
   const sizingLong = computePositionSize(long.entry, long.stop);
   const sizingShort = computePositionSize(short.entry, short.stop);
 
   const renderSizingRow = (sizing) => {
-    if (!sizing) {
-      return `<div class="position-size-row"><span class="label">Montant à investir</span><span class="value" style="color:var(--text-dim); font-weight:400;">renseigne ta balance ci-dessus</span></div>`;
-    }
+    if (!sizing) return `<div class="position-size-row"><span class="label">Montant à investir</span><span class="value" style="color:var(--text-dim); font-weight:400;">renseigne ta balance ci-dessus</span></div>`;
     if (sizing.balanceCapped) {
       const actualRiskPct = (sizing.riskAmount / userBalance) * 100;
-      return `<div class="position-size-row" style="flex-direction:column; align-items:stretch; gap:4px;">
-        <div style="display:flex; justify-content:space-between;"><span class="label">Montant à investir</span><span class="value">${sizing.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$ <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(= toute ta balance)</span></span></div>
-        <div style="font-size:11px; color:var(--warn); font-family:var(--sans);">⚠ Stop trop proche pour respecter ${riskPct}% avec cette balance — risque réel ~${actualRiskPct.toFixed(1)}% (${sizing.riskAmount.toFixed(2)}$) si tout le capital est engagé</div>
-      </div>`;
+      return `<div class="position-size-row" style="flex-direction:column; align-items:stretch; gap:4px;"><div style="display:flex; justify-content:space-between;"><span class="label">Montant à investir</span><span class="value">${sizing.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$ <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(= toute ta balance)</span></span></div><div style="font-size:11px; color:var(--warn); font-family:var(--sans);">⚠ Stop trop proche pour respecter ${riskPct}% avec cette balance — risque réel ~${actualRiskPct.toFixed(1)}% (${sizing.riskAmount.toFixed(2)}$) si tout le capital est engagé</div></div>`;
     }
     return `<div class="position-size-row"><span class="label">Montant à investir (${riskPct}% risqué)</span><span class="value">${sizing.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$ <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(${sizing.shares.toFixed(3)} actions · ~${sizing.riskAmount.toFixed(2)}$ risqués si SL touché)</span></span></div>`;
   };
@@ -1378,10 +897,7 @@ function renderTradeLevels(a, ticker, orbMinutes) {
   return `
     <div class="trade-levels">
       <div class="trade-card ${isLongActive ? 'active-long' : ''}">
-        <div class="trade-card-header">
-          <span class="trade-card-title long-title">▲ Long</span>
-          ${isLongActive ? '<span class="trade-active-badge">SIGNAL ACTIF</span>' : ''}
-        </div>
+        <div class="trade-card-header"><span class="trade-card-title long-title">▲ Long</span>${isLongActive ? '<span class="trade-active-badge">SIGNAL ACTIF</span>' : ''}</div>
         <div class="trade-row"><span class="trade-row-label">Entrée (ORB High)</span><span class="trade-row-value">${long.entry.toFixed(2)}</span></div>
         <div class="trade-row"><span class="trade-row-label">Stop-loss</span><span class="trade-row-value" style="color:var(--bear)">${long.stop.toFixed(2)}</span></div>
         <div class="trade-row"><span class="trade-row-label">Take-profit (${long.rr}:1)</span><span class="trade-row-value" style="color:var(--bull)">${long.target.toFixed(2)}</span></div>
@@ -1390,12 +906,8 @@ function renderTradeLevels(a, ticker, orbMinutes) {
         <div class="trade-card-note">${long.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
         <button class="add-to-history-btn" data-direction="long" data-ticker="${ticker}" data-orb="${orbMinutes}" data-entry="${long.entry}" data-stop="${long.stop}" data-target="${long.target}" data-position="${sizingLong ? sizingLong.positionValue : ''}" data-shares="${sizingLong ? sizingLong.shares : ''}" data-grade="${a.setupScore.grade}">+ Ajouter au suivi</button>
       </div>
-
       <div class="trade-card ${isShortActive ? 'active-short' : ''}">
-        <div class="trade-card-header">
-          <span class="trade-card-title short-title">▼ Short</span>
-          ${isShortActive ? '<span class="trade-active-badge">SIGNAL ACTIF</span>' : ''}
-        </div>
+        <div class="trade-card-header"><span class="trade-card-title short-title">▼ Short</span>${isShortActive ? '<span class="trade-active-badge">SIGNAL ACTIF</span>' : ''}</div>
         <div class="trade-row"><span class="trade-row-label">Entrée (ORB Low)</span><span class="trade-row-value">${short.entry.toFixed(2)}</span></div>
         <div class="trade-row"><span class="trade-row-label">Stop-loss</span><span class="trade-row-value" style="color:var(--bear)">${short.stop.toFixed(2)}</span></div>
         <div class="trade-row"><span class="trade-row-label">Take-profit (${short.rr}:1)</span><span class="trade-row-value" style="color:var(--bull)">${short.target.toFixed(2)}</span></div>
@@ -1410,75 +922,33 @@ function renderTradeLevels(a, ticker, orbMinutes) {
 
 function renderIndicatorCard(label, value, unit, subtext, tagType) {
   const tagClass = tagType === 'good' ? 'tag-good' : tagType === 'bad' ? 'tag-bad' : 'tag-warn';
-  return `
-    <div class="indicator-card">
-      <div class="indicator-label">${label}</div>
-      <div class="indicator-value">${value}${unit ? `<span class="indicator-unit">${unit}</span>` : ''}</div>
-      ${tagType ? `<div class="indicator-tag ${tagClass}">${subtext}</div>` : `<div class="indicator-tag" style="background:var(--bg-panel-raised); color:var(--text-dim);">${subtext}</div>`}
-    </div>
-  `;
+  return `<div class="indicator-card"><div class="indicator-label">${label}</div><div class="indicator-value">${value}${unit ? `<span class="indicator-unit">${unit}</span>` : ''}</div>${tagType ? `<div class="indicator-tag ${tagClass}">${subtext}</div>` : `<div class="indicator-tag" style="background:var(--bg-panel-raised); color:var(--text-dim);">${subtext}</div>`}</div>`;
 }
 
 function renderChart(data, a) {
   const container = document.getElementById('chart-container');
-
   if (typeof LightweightCharts === 'undefined') {
     container.innerHTML = `<div class="error-state">La librairie de graphique n'a pas pu se charger (CDN indisponible). Les indicateurs ci-contre restent valides — recharge la page dans quelques secondes.</div>`;
     return;
   }
-
   container.innerHTML = '';
-
   chart = LightweightCharts.createChart(container, {
-    width: container.clientWidth,
-    height: 480,
-    layout: {
-      background: { color: 'transparent' },
-      textColor: '#6B6D73',
-      fontFamily: 'JetBrains Mono, monospace',
-      fontSize: 11,
-    },
-    grid: {
-      vertLines: { color: '#1A1B1F' },
-      horzLines: { color: '#1A1B1F' },
-    },
+    width: container.clientWidth, height: 480,
+    layout: { background: { color: 'transparent' }, textColor: '#6B6D73', fontFamily: 'JetBrains Mono, monospace', fontSize: 11 },
+    grid: { vertLines: { color: '#1A1B1F' }, horzLines: { color: '#1A1B1F' } },
     rightPriceScale: { borderColor: '#24262B' },
     timeScale: { borderColor: '#24262B', timeVisible: true, secondsVisible: false },
     crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
   });
-
-  candleSeries = chart.addCandlestickSeries({
-    upColor: '#4A9B7F',
-    downColor: '#C4554A',
-    borderUpColor: '#4A9B7F',
-    borderDownColor: '#C4554A',
-    wickUpColor: '#4A9B7F',
-    wickDownColor: '#C4554A',
-  });
-
-  const candles = a.lastDayIdx.map(i => ({
-    time: data.timestamps[i],
-    open: data.opens[i],
-    high: data.highs[i],
-    low: data.lows[i],
-    close: data.closes[i],
-  }));
+  candleSeries = chart.addCandlestickSeries({ upColor: '#4A9B7F', downColor: '#C4554A', borderUpColor: '#4A9B7F', borderDownColor: '#C4554A', wickUpColor: '#4A9B7F', wickDownColor: '#C4554A' });
+  const candles = a.lastDayIdx.map(i => ({ time: data.timestamps[i], open: data.opens[i], high: data.highs[i], low: data.lows[i], close: data.closes[i] }));
   candleSeries.setData(candles);
-
-  // VWAP line
   const vwapLine = chart.addLineSeries({ color: '#7B8FA6', lineWidth: 2, priceLineVisible: false });
   vwapLine.setData(a.lastDayIdx.map((i, idx) => ({ time: data.timestamps[i], value: a.vwapSeries[idx] })));
-
-  // ORB High/Low as horizontal price lines
   candleSeries.createPriceLine({ price: a.orbHigh, color: '#4A9B7F', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'ORB High' });
   candleSeries.createPriceLine({ price: a.orbLow, color: '#C4554A', lineWidth: 1, lineStyle: LightweightCharts.LineStyle.Dashed, title: 'ORB Low' });
-
   chart.timeScale().fitContent();
-
-  new ResizeObserver(entries => {
-    if (entries.length === 0 || !chart) return;
-    chart.applyOptions({ width: entries[0].contentRect.width });
-  }).observe(container);
+  new ResizeObserver(entries => { if (entries.length === 0 || !chart) return; chart.applyOptions({ width: entries[0].contentRect.width }); }).observe(container);
 }
 
 function escapeHtml(str) {
