@@ -186,6 +186,29 @@
 
   #portfolio-link:hover { border-color: var(--bull); color: var(--text); }
 
+  .data-source-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    padding: 5px 10px;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    background: var(--bg-panel);
+  }
+
+  .data-source-badge .src-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+  }
+
+  .data-source-badge.src-yahoo .src-dot { background: var(--bull); box-shadow: 0 0 6px var(--bull); }
+  .data-source-badge.src-twelvedata .src-dot { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+  .data-source-badge.src-unknown .src-dot { background: var(--text-dim); }
+
   /* Fenêtre de trading */
   .session-status {
     display: flex;
@@ -858,6 +881,7 @@
       <button id="history-btn" title="Voir l'historique des signaux">◷ Historique</button>
       <a href="portfolio.html" id="portfolio-link" title="Portfolio — calendrier de performance ORB">▦ Portfolio</a>
       <a href="guides.html" id="guides-link" title="Guide de la stratégie ORB — fonctionnement et signaux">📖 Guide</a>
+      <span id="data-source-badge"></span>
     </div>
   </header>
 
