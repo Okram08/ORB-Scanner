@@ -272,8 +272,24 @@ async function runAnalysis() {
 
 function sleep(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
 
+let lastKnownSource = null; // 'yahoo' | 'twelvedata-fallback' | null — déclaré ici pour être disponible avant runScanAll
+
 const SCAN_BATCH_SIZE = 4;
 const SCAN_BATCH_DELAY_MS = 8000;
+
+// Lance le traitement d'un lot de tickers en parallèle (sans throttling) — utilisé
+// quand la source est Yahoo (illimité) ou pas encore connue (premier ticker éclaireur).
+async function runTickersInParallel(tickers, orbMinutes, results, scanBtn) {
+  await Promise.all(tickers.map(async (ticker) => {
+    try {
+      const { analysis } = await analyzeTicker(ticker, orbMinutes);
+      results[ticker] = { status: 'done', analysis };
+    } catch (err) {
+      results[ticker] = { status: 'error', message: err.message };
+    }
+    renderScanTable(results, orbMinutes);
+  }));
+}
 
 async function runScanAll() {
   if (watchlist.length === 0) return;
@@ -285,24 +301,45 @@ async function runScanAll() {
   watchlist.forEach(t => { results[t] = { status: 'loading' }; });
   renderScanTable(results, orbMinutes);
 
-  const batches = [];
-  for (let i = 0; i < watchlist.length; i += SCAN_BATCH_SIZE) {
-    batches.push(watchlist.slice(i, i + SCAN_BATCH_SIZE));
+  // --- Étape 1 : un ticker "éclaireur" seul, pour déterminer la source active
+  // avant de décider s'il faut throttler le reste du scan. Sauf si on connaît déjà
+  // la source d'un scan précédent dans cette session (lastKnownSource) — dans ce
+  // cas on se fie directement à elle, pas besoin de repayer ce coût à chaque scan.
+  let remainingTickers = watchlist;
+
+  if (lastKnownSource === null) {
+    const scout = watchlist[0];
+    if (scanBtn) scanBtn.textContent = `⚡ Scan en cours...`;
+    try {
+      const { analysis } = await analyzeTicker(scout, orbMinutes);
+      results[scout] = { status: 'done', analysis };
+    } catch (err) {
+      results[scout] = { status: 'error', message: err.message };
+    }
+    renderScanTable(results, orbMinutes);
+    remainingTickers = watchlist.slice(1);
   }
 
-  for (let b = 0; b < batches.length; b++) {
-    const batch = batches[b];
-    if (scanBtn) scanBtn.textContent = `⚡ Scan en cours... (${b * SCAN_BATCH_SIZE}/${watchlist.length})`;
-    await Promise.all(batch.map(async (ticker) => {
-      try {
-        const { analysis } = await analyzeTicker(ticker, orbMinutes);
-        results[ticker] = { status: 'done', analysis };
-      } catch (err) {
-        results[ticker] = { status: 'error', message: err.message };
-      }
-      renderScanTable(results, orbMinutes);
-    }));
-    if (b < batches.length - 1) await sleep(SCAN_BATCH_DELAY_MS);
+  // --- Étape 2 : traite le reste selon la source maintenant connue ---
+  if (lastKnownSource === 'twelvedata-fallback') {
+    // Twelve Data : limite stricte à 8 requêtes/minute côté source gratuite —
+    // on throttle par petits groupes avec pause entre chaque.
+    const batches = [];
+    for (let i = 0; i < remainingTickers.length; i += SCAN_BATCH_SIZE) {
+      batches.push(remainingTickers.slice(i, i + SCAN_BATCH_SIZE));
+    }
+    let done = watchlist.length - remainingTickers.length;
+    for (let b = 0; b < batches.length; b++) {
+      if (scanBtn) scanBtn.textContent = `⚡ Scan en cours... (${done}/${watchlist.length}, mode secours limité)`;
+      await runTickersInParallel(batches[b], orbMinutes, results, scanBtn);
+      done += batches[b].length;
+      if (b < batches.length - 1) await sleep(SCAN_BATCH_DELAY_MS);
+    }
+  } else {
+    // Yahoo (ou source encore inconnue si le scout a échoué) : pas de limite de
+    // débit connue, tout le reste part en une seule vague parallèle.
+    if (scanBtn) scanBtn.textContent = `⚡ Scan en cours...`;
+    await runTickersInParallel(remainingTickers, orbMinutes, results, scanBtn);
   }
 
   if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = `⚡ Scanner tout (${watchlist.length})`; }
@@ -350,8 +387,6 @@ function renderScanTable(results, orbMinutes) {
 // ------------------------------------------------------------
 // INDICATEUR DE SOURCE DE DONNÉES — Yahoo (principal) vs Twelve Data (fallback)
 // ------------------------------------------------------------
-let lastKnownSource = null; // 'yahoo' | 'twelvedata-fallback' | null
-
 function renderDataSourceBadge() {
   if (!els.dataSourceBadge) return;
   if (lastKnownSource === 'yahoo') {
