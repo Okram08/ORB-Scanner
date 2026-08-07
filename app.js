@@ -345,8 +345,41 @@ async function runScanAll() {
   if (scanBtn) { scanBtn.disabled = false; scanBtn.textContent = `⚡ Scanner tout (${watchlist.length})`; }
 }
 
+const GRADE_ORDER = { S: 0, A: 1, B: 2, C: 3, D: 4, E: 5 };
+
+function sortWatchlistForScan(results) {
+  return [...watchlist].sort((tickerA, tickerB) => {
+    const rA = results[tickerA];
+    const rB = results[tickerB];
+
+    // Priorité de statut : done (résolu) > loading > error
+    const statusRank = (r) => !r ? 2 : r.status === 'done' ? 0 : r.status === 'loading' ? 1 : 3;
+    const sA = statusRank(rA), sB = statusRank(rB);
+    if (sA !== sB) return sA - sB;
+    if (sA !== 0) return 0; // pas encore résolus des deux côtés, garde l'ordre watchlist
+
+    // Un ticker déjà en position (pending) descend en fin de liste résolue —
+    // tu n'as plus besoin d'agir dessus, pas la peine qu'il occupe le haut du tableau.
+    const pendingA = getPendingTradeForTicker(tickerA) ? 1 : 0;
+    const pendingB = getPendingTradeForTicker(tickerB) ? 1 : 0;
+    if (pendingA !== pendingB) return pendingA - pendingB;
+
+    // Parmi les résolus (hors position déjà ouverte) : signal confirmé avant neutre
+    const sigRank = (r) => r.analysis.signal === 'bull' || r.analysis.signal === 'bear' ? 0 : 1;
+    const sigA = sigRank(rA), sigB = sigRank(rB);
+    if (sigA !== sigB) return sigA - sigB;
+
+    // Puis par grade (S d'abord, E en dernier)
+    const gA = GRADE_ORDER[rA.analysis.setupScore.grade] ?? 6;
+    const gB = GRADE_ORDER[rB.analysis.setupScore.grade] ?? 6;
+    return gA - gB;
+  });
+}
+
 function renderScanTable(results, orbMinutes) {
-  const rows = watchlist.map(ticker => {
+  const sortedTickers = sortWatchlistForScan(results);
+
+  const rows = sortedTickers.map(ticker => {
     const r = results[ticker];
     if (!r || r.status === 'loading') {
       return `<tr class="scan-row" data-ticker="${ticker}"><td class="scan-ticker">${ticker}</td><td colspan="6"><span class="scan-signal-cell"><span class="scan-signal-dot dot-loading"></span>Analyse en cours...</span></td></tr>`;
@@ -354,6 +387,15 @@ function renderScanTable(results, orbMinutes) {
     if (r.status === 'error') {
       return `<tr class="scan-row" data-ticker="${ticker}"><td class="scan-ticker">${ticker}</td><td colspan="6"><span class="scan-signal-cell"><span class="scan-signal-dot dot-error"></span>${escapeHtml(r.message)}</span></td></tr>`;
     }
+
+    // Ticker déjà en position ouverte (pending dans le journal) : on l'affiche
+    // distinctement plutôt que de proposer à nouveau le même signal d'entrée.
+    const pendingTrade = getPendingTradeForTicker(ticker);
+    if (pendingTrade) {
+      const dirLabel = pendingTrade.direction === 'long' ? '▲ Long' : '▼ Short';
+      return `<tr class="scan-row" data-ticker="${ticker}" style="opacity:0.6;"><td class="scan-ticker">${ticker}</td><td colspan="6"><span class="scan-signal-cell">📍 Déjà en position (${dirLabel}, entrée ${pendingTrade.entry.toFixed(2)}) — vois le journal pour la suivre</span></td></tr>`;
+    }
+
     const a = r.analysis;
     const signalMeta = {
       bull: { dot: 'dot-bull', label: 'BREAKOUT HAUSSIER', row: 'row-bull' },
@@ -387,12 +429,25 @@ function renderScanTable(results, orbMinutes) {
 // ------------------------------------------------------------
 // INDICATEUR DE SOURCE DE DONNÉES — Yahoo (principal) vs Twelve Data (fallback)
 // ------------------------------------------------------------
+let lastDataTimestamp = null; // regularMarketTime (epoch secondes) de la dernière donnée reçue
+
 function renderDataSourceBadge() {
   if (!els.dataSourceBadge) return;
+
+  const timeLabel = lastDataTimestamp
+    ? ` · ${new Date(lastDataTimestamp * 1000).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
+    : '';
+
+  // Alerte visuelle si la dernière donnée reçue a plus de 15 minutes — signe possible
+  // d'une source périmée (comme la panne Yahoo du 6 août), sans avoir à faire le calcul
+  // toi-même en pleine séance.
+  const isStale = lastDataTimestamp && (Date.now() / 1000 - lastDataTimestamp) > 15 * 60;
+  const staleWarning = isStale ? ` <span style="color:var(--bear);" title="Cette donnée a plus de 15 minutes — vérifie qu'elle est bien à jour">⚠</span>` : '';
+
   if (lastKnownSource === 'yahoo') {
-    els.dataSourceBadge.innerHTML = `<span class="data-source-badge src-yahoo"><span class="src-dot"></span>Yahoo</span>`;
+    els.dataSourceBadge.innerHTML = `<span class="data-source-badge src-yahoo"><span class="src-dot"></span>Yahoo${timeLabel}${staleWarning}</span>`;
   } else if (lastKnownSource === 'twelvedata-fallback') {
-    els.dataSourceBadge.innerHTML = `<span class="data-source-badge src-twelvedata" title="Yahoo indisponible, Twelve Data utilisé en secours"><span class="src-dot"></span>Twelve Data (secours)</span>`;
+    els.dataSourceBadge.innerHTML = `<span class="data-source-badge src-twelvedata" title="Yahoo indisponible, Twelve Data utilisé en secours"><span class="src-dot"></span>Twelve Data (secours)${timeLabel}${staleWarning}</span>`;
   } else {
     els.dataSourceBadge.innerHTML = `<span class="data-source-badge src-unknown"><span class="src-dot"></span>Source : —</span>`;
   }
@@ -422,6 +477,13 @@ async function fetchYahooData(ticker) {
       const data = proxy.parse(text);
       if (data?.chart?.error) throw new Error(data.chart.error.description || 'Ticker introuvable');
       if (!data?.chart?.result?.[0]) throw new Error('Réponse vide');
+
+      // Met à jour l'horodatage affiché dans le badge, quelle que soit la source —
+      // c'est ce qui aurait permis de repérer immédiatement la panne Yahoo du 6 août
+      // (donnée figée sur la veille) au lieu de le découvrir en pleine séance.
+      const marketTime = data.chart.result[0].meta?.regularMarketTime;
+      if (marketTime) { lastDataTimestamp = marketTime; renderDataSourceBadge(); }
+
       return data;
     } catch (e) {
       failures.push(`${proxy.name}: ${e.name === 'AbortError' ? 'timeout' : e.message}`);
@@ -687,6 +749,14 @@ function loadHistory() {
   } catch { return []; }
 }
 
+// Vérifie si un ticker a déjà une position "pending" (en cours) dans le journal —
+// utilisé pour éviter de re-proposer le même trade dans le scan alors qu'il est
+// déjà suivi. Renvoie l'entrée du journal si trouvée, sinon null.
+function getPendingTradeForTicker(ticker) {
+  const history = loadHistory();
+  return history.find(h => h.ticker === ticker && h.outcome === 'pending') || null;
+}
+
 function migrateHistoryEntry(h) {
   if (!h || typeof h !== 'object') return null;
   if (h.id && h.direction && h.outcome) return h;
@@ -737,6 +807,92 @@ function updateTradeOutcome(id, outcome, exitPrice) {
 
 function deleteTradeFromHistory(id) { saveHistory(loadHistory().filter(h => h.id !== id)); }
 
+// ------------------------------------------------------------
+// EXPORT / IMPORT — CSV du journal, et sauvegarde complète JSON
+// (watchlist, balance, journal) pour ne rien perdre en changeant de machine.
+// ------------------------------------------------------------
+function downloadFile(filename, content, mimeType) {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+function exportHistoryToCsv() {
+  const history = loadHistory();
+  if (history.length === 0) { alert('Le journal est vide, rien à exporter.'); return; }
+
+  const headers = ['Ticker', 'Date', 'Direction', 'Grade', 'Entrée', 'Stop', 'Target', 'Montant', 'PnL', 'Résultat'];
+  const outcomeLabels = { win: 'Gagné', loss: 'Perdu', breakeven: 'Clôturé manuel', pending: 'En cours' };
+
+  const csvRows = [headers.join(',')];
+  history.forEach(h => {
+    const row = [
+      h.ticker, h.date, h.direction === 'long' ? 'Long' : 'Short', h.grade || '',
+      h.entry, h.stop, h.target,
+      h.positionValue != null ? h.positionValue.toFixed(2) : '',
+      h.pnl != null ? h.pnl.toFixed(2) : '',
+      outcomeLabels[h.outcome] || h.outcome,
+    ];
+    // Échappe les valeurs contenant une virgule (aucune ici en pratique, mais par sécurité)
+    csvRows.push(row.map(v => `"${String(v).replace(/"/g, '""')}"`).join(','));
+  });
+
+  const csvContent = csvRows.join('\n');
+  const dateStr = new Date().toISOString().slice(0, 10);
+  downloadFile(`orb-journal-${dateStr}.csv`, csvContent, 'text/csv;charset=utf-8;');
+}
+
+function exportFullBackupToJson() {
+  const backup = {
+    exportedAt: new Date().toISOString(),
+    watchlist: loadWatchlist(),
+    balance: loadBalance(),
+    riskPct: loadRiskPct(),
+    history: loadHistory(),
+  };
+  const dateStr = new Date().toISOString().slice(0, 10);
+  downloadFile(`orb-scanner-backup-${dateStr}.json`, JSON.stringify(backup, null, 2), 'application/json');
+}
+
+function handleImportJsonFile(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+
+  const reader = new FileReader();
+  reader.onload = (e) => {
+    try {
+      const backup = JSON.parse(e.target.result);
+      const summary = [];
+      if (Array.isArray(backup.watchlist)) summary.push(`${backup.watchlist.length} ticker(s) en watchlist`);
+      if (typeof backup.balance === 'number') summary.push(`balance : ${backup.balance}$`);
+      if (Array.isArray(backup.history)) summary.push(`${backup.history.length} trade(s) dans le journal`);
+
+      const confirmed = confirm(`Restaurer cette sauvegarde (${summary.join(', ')}) ?\n\nCela remplacera tes données actuelles.`);
+      if (!confirmed) return;
+
+      if (Array.isArray(backup.watchlist)) { watchlist = backup.watchlist; saveWatchlist(); }
+      if (typeof backup.balance === 'number') { userBalance = backup.balance; saveBalance(backup.balance); }
+      if (typeof backup.riskPct === 'number') { riskPct = backup.riskPct; saveRiskPct(backup.riskPct); }
+      if (Array.isArray(backup.history)) { saveHistory(backup.history); }
+
+      alert('Sauvegarde restaurée avec succès.');
+      renderWatchlistBar();
+      renderBalanceBar();
+      renderHistoryPage();
+    } catch (err) {
+      alert('Fichier invalide ou corrompu : ' + err.message);
+    }
+  };
+  reader.readAsText(file);
+  event.target.value = ''; // permet de réimporter le même fichier si besoin
+}
+
 function renderHistoryPage() {
   const history = loadHistory();
   if (history.length === 0) {
@@ -761,6 +917,23 @@ function renderHistoryPage() {
     return `<span style="margin-right:14px;"><strong style="color:var(--text-bright);">${g}</strong>: ${wr}% (${tradesForGrade.length})</span>`;
   }).filter(Boolean).join('');
 
+  // Winrate par ticker — sur les trades résolus (win/loss), trié par PnL décroissant
+  // pour repérer d'un coup d'œil les tickers qui performent bien ou mal pour toi.
+  const tickerNames = [...new Set(history.map(h => h.ticker))];
+  const tickerStats = tickerNames.map(tk => {
+    const tradesForTicker = history.filter(h => h.ticker === tk && (h.outcome === 'win' || h.outcome === 'loss'));
+    if (tradesForTicker.length === 0) return null;
+    const w = tradesForTicker.filter(h => h.outcome === 'win').length;
+    const wr = (w / tradesForTicker.length) * 100;
+    const pnlSum = tradesForTicker.reduce((s, h) => s + (h.pnl || 0), 0);
+    return { ticker: tk, winrate: wr, count: tradesForTicker.length, pnl: pnlSum };
+  }).filter(Boolean).sort((a, b) => b.pnl - a.pnl);
+
+  const tickerStatsHtml = tickerStats.map(s => {
+    const color = s.pnl >= 0 ? 'var(--bull)' : 'var(--bear)';
+    return `<span style="margin-right:14px;"><strong style="color:var(--text-bright);">${s.ticker}</strong>: ${s.winrate.toFixed(0)}% (${s.count}) <span style="color:${color};">${s.pnl >= 0 ? '+' : ''}${s.pnl.toFixed(2)}$</span></span>`;
+  }).join('');
+
   const rows = history.map(h => {
     const outcomeMeta = { win: { label: 'Gagné', cls: 'tag-good' }, loss: { label: 'Perdu', cls: 'tag-bad' }, breakeven: { label: 'Clôturé manuel', cls: 'tag-warn' }, pending: { label: 'En cours', cls: 'tag-warn' } }[h.outcome];
     const dirLabel = h.direction === 'long' ? '▲ Long' : '▼ Short';
@@ -783,13 +956,25 @@ function renderHistoryPage() {
       <span>${history.length} trade${history.length > 1 ? 's' : ''} enregistré${history.length > 1 ? 's' : ''}</span>
       <span class="signal-detail">${wins} gagné${wins > 1 ? 's' : ''} · ${losses} perdu${losses > 1 ? 's' : ''} · ${breakeven} clôturé${breakeven > 1 ? 's' : ''} manuellement · ${pending} en cours${resolved > 0 ? ` · winrate: ${winrate}%` : ''}</span>
     </div>
-    ${gradeStatsHtml ? `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:16px;">Winrate par grade : ${gradeStatsHtml}</div>` : ''}
+    ${gradeStatsHtml ? `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:8px;">Winrate par grade : ${gradeStatsHtml}</div>` : ''}
+    ${tickerStatsHtml ? `<div style="font-family:var(--mono); font-size:12px; color:var(--text-dim); margin-bottom:16px;">Winrate par ticker : ${tickerStatsHtml}</div>` : ''}
     <table class="scan-table">
       <thead><tr><th>Ticker</th><th>Date</th><th>Direction</th><th>Grade</th><th>Entrée</th><th>Stop</th><th>Target</th><th>Montant</th><th>PnL</th><th>Résultat</th></tr></thead>
       <tbody>${rows}</tbody>
     </table>
-    <div style="margin-top:16px;"><button class="back-to-scan" id="clear-history-btn">Effacer tout le journal</button></div>
+    <div style="margin-top:16px; display:flex; gap:8px; flex-wrap:wrap;">
+      <button class="back-to-scan" id="export-csv-btn">⬇ Export CSV</button>
+      <button class="back-to-scan" id="export-json-btn">⬇ Sauvegarde complète (JSON)</button>
+      <button class="back-to-scan" id="import-json-btn">⬆ Restaurer une sauvegarde</button>
+      <input type="file" id="import-json-input" accept=".json" style="display:none;">
+      <button class="back-to-scan" id="clear-history-btn">Effacer tout le journal</button>
+    </div>
   `;
+
+  document.getElementById('export-csv-btn')?.addEventListener('click', exportHistoryToCsv);
+  document.getElementById('export-json-btn')?.addEventListener('click', exportFullBackupToJson);
+  document.getElementById('import-json-btn')?.addEventListener('click', () => document.getElementById('import-json-input').click());
+  document.getElementById('import-json-input')?.addEventListener('change', handleImportJsonFile);
 
   document.getElementById('clear-history-btn')?.addEventListener('click', () => {
     if (confirm('Effacer tout le journal de suivi ? Cette action est irréversible.')) { saveHistory([]); renderHistoryPage(); }
@@ -975,6 +1160,17 @@ function renderTradeLevels(a, ticker, orbMinutes) {
     return `<div class="position-size-row"><span class="label">Montant à investir (${riskPct}% risqué)</span><span class="value">${sizing.positionValue.toLocaleString('fr-BE', { maximumFractionDigits: 2 })}$ <span style="color:var(--text-dim); font-weight:400; font-size:11px;">(${sizing.shares.toFixed(3)} actions · ~${sizing.riskAmount.toFixed(2)}$ risqués si SL touché)</span></span></div>`;
   };
 
+  const pendingTrade = getPendingTradeForTicker(ticker);
+  const alreadyPendingLong = pendingTrade && pendingTrade.direction === 'long';
+  const alreadyPendingShort = pendingTrade && pendingTrade.direction === 'short';
+
+  const renderAddButton = (direction, entry, stop, target, sizing, alreadyPending) => {
+    if (alreadyPending) {
+      return `<div style="width:100%; margin-top:14px; text-align:center; font-size:12px; color:var(--text-dim); padding:9px 12px; border:1px dashed var(--border); border-radius:6px;">📍 Déjà suivi dans le journal (${direction === 'long' ? 'Long' : 'Short'})</div>`;
+    }
+    return `<button class="add-to-history-btn" data-direction="${direction}" data-ticker="${ticker}" data-orb="${orbMinutes}" data-entry="${entry}" data-stop="${stop}" data-target="${target}" data-position="${sizing ? sizing.positionValue : ''}" data-shares="${sizing ? sizing.shares : ''}" data-grade="${a.setupScore.grade}">+ Ajouter au suivi</button>`;
+  };
+
   return `
     <div class="trade-levels">
       <div class="trade-card ${isLongActive ? 'active-long' : ''}">
@@ -985,7 +1181,7 @@ function renderTradeLevels(a, ticker, orbMinutes) {
         <div class="trade-row"><span class="trade-row-label">Risque / Reward</span><span class="trade-row-value">${riskLong.toFixed(2)} / ${rewardLong.toFixed(2)}</span></div>
         ${renderSizingRow(sizingLong)}
         <div class="trade-card-note">${long.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
-        <button class="add-to-history-btn" data-direction="long" data-ticker="${ticker}" data-orb="${orbMinutes}" data-entry="${long.entry}" data-stop="${long.stop}" data-target="${long.target}" data-position="${sizingLong ? sizingLong.positionValue : ''}" data-shares="${sizingLong ? sizingLong.shares : ''}" data-grade="${a.setupScore.grade}">+ Ajouter au suivi</button>
+        ${renderAddButton('long', long.entry, long.stop, long.target, sizingLong, alreadyPendingLong)}
       </div>
       <div class="trade-card ${isShortActive ? 'active-short' : ''}">
         <div class="trade-card-header"><span class="trade-card-title short-title">▼ Short</span>${isShortActive ? '<span class="trade-active-badge">SIGNAL ACTIF</span>' : ''}</div>
@@ -995,7 +1191,7 @@ function renderTradeLevels(a, ticker, orbMinutes) {
         <div class="trade-row"><span class="trade-row-label">Risque / Reward</span><span class="trade-row-value">${riskShort.toFixed(2)} / ${rewardShort.toFixed(2)}</span></div>
         ${renderSizingRow(sizingShort)}
         <div class="trade-card-note">${short.stopCapped ? 'Stop plafonné à 1.5× ATR (range ORB plus large que la normale)' : 'Stop à l\'opposé exact du range ORB'}</div>
-        <button class="add-to-history-btn" data-direction="short" data-ticker="${ticker}" data-orb="${orbMinutes}" data-entry="${short.entry}" data-stop="${short.stop}" data-target="${short.target}" data-position="${sizingShort ? sizingShort.positionValue : ''}" data-shares="${sizingShort ? sizingShort.shares : ''}" data-grade="${a.setupScore.grade}">+ Ajouter au suivi</button>
+        ${renderAddButton('short', short.entry, short.stop, short.target, sizingShort, alreadyPendingShort)}
       </div>
     </div>
   `;
