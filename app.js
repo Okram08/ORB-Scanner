@@ -225,13 +225,32 @@ els.btn.addEventListener('click', runAnalysis);
 els.input.addEventListener('keydown', (e) => { if (e.key === 'Enter') runAnalysis(); });
 document.getElementById('history-btn').addEventListener('click', renderHistoryPage);
 
+// ------------------------------------------------------------
+// CACHE DE RÉSULTATS — évite de rescanner en réseau si le résultat a moins
+// d'1 minute. En mémoire (Map), donc réinitialisé à chaque rechargement de
+// page — mais évite les rescans inutiles si tu navigues entre les vues
+// (détail d'un ticker <-> tableau groupé) dans la même session sans attendre.
+// ------------------------------------------------------------
+const analysisCache = new Map(); // clé: "TICKER|orbMinutes" -> { parsed, analysis, cachedAt }
+const CACHE_MAX_AGE_MS = 60 * 1000; // 1 minute
+
 async function analyzeTicker(ticker, orbMinutes) {
+  const cacheKey = `${ticker}|${orbMinutes}`;
+  const cached = analysisCache.get(cacheKey);
+
+  if (cached && (Date.now() - cached.cachedAt) < CACHE_MAX_AGE_MS) {
+    return { parsed: cached.parsed, analysis: cached.analysis };
+  }
+
   const raw = await fetchYahooData(ticker);
   const parsed = parseYahooResponse(raw);
   if (!parsed || parsed.closes.length < 20) {
     throw new Error('Pas assez de données intraday (marché fermé ou ticker invalide)');
   }
   const analysis = computeIndicators(parsed, orbMinutes);
+
+  analysisCache.set(cacheKey, { parsed, analysis, cachedAt: Date.now() });
+
   return { parsed, analysis };
 }
 
