@@ -41,6 +41,7 @@ const els = {
   watchlistBar: document.getElementById('watchlist-bar'),
   sessionStatusBar: document.getElementById('session-status-bar'),
   balanceBar: document.getElementById('balance-bar'),
+  dataSourceBadge: document.getElementById('data-source-badge'),
 };
 
 const SESSION_START_MIN = 9 * 60 + 30;
@@ -327,6 +328,24 @@ function renderScanTable(results, orbMinutes) {
   });
 }
 
+// ------------------------------------------------------------
+// INDICATEUR DE SOURCE DE DONNÉES — Yahoo (principal) vs Twelve Data (fallback)
+// ------------------------------------------------------------
+let lastKnownSource = null; // 'yahoo' | 'twelvedata-fallback' | null
+
+function renderDataSourceBadge() {
+  if (!els.dataSourceBadge) return;
+  if (lastKnownSource === 'yahoo') {
+    els.dataSourceBadge.innerHTML = `<span class="data-source-badge src-yahoo"><span class="src-dot"></span>Yahoo</span>`;
+  } else if (lastKnownSource === 'twelvedata-fallback') {
+    els.dataSourceBadge.innerHTML = `<span class="data-source-badge src-twelvedata" title="Yahoo indisponible, Twelve Data utilisé en secours"><span class="src-dot"></span>Twelve Data (secours)</span>`;
+  } else {
+    els.dataSourceBadge.innerHTML = `<span class="data-source-badge src-unknown"><span class="src-dot"></span>Source : —</span>`;
+  }
+}
+
+renderDataSourceBadge();
+
 async function fetchYahooData(ticker) {
   const yahooUrl = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(ticker)}?interval=5m&range=5d`;
   const failures = [];
@@ -337,6 +356,14 @@ async function fetchYahooData(ticker) {
       const res = await fetch(proxy.build(yahooUrl), { signal: controller.signal });
       clearTimeout(timeout);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
+
+      // Le badge de source est lisible uniquement via notre Worker Cloudflare (les
+      // proxies de secours de la liste ne fournissent pas cet en-tête).
+      if (proxy.name === 'cloudflare-worker') {
+        const src = res.headers.get('X-Data-Source');
+        if (src) { lastKnownSource = src; renderDataSourceBadge(); }
+      }
+
       const text = await res.text();
       const data = proxy.parse(text);
       if (data?.chart?.error) throw new Error(data.chart.error.description || 'Ticker introuvable');
